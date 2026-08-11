@@ -39,6 +39,12 @@ class Payment(BaseModel):
         blank=True,
     )
 
+    provider_reference = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+    )
+
     amount = models.PositiveIntegerField()
 
     status = models.CharField(

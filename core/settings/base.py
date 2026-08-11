@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 from pathlib import Path
 from decouple import config
 from datetime import timedelta
+import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -61,6 +62,8 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "PAGE_SIZE": 10,
 }
 
 SIMPLE_JWT = {
@@ -70,6 +73,21 @@ SIMPLE_JWT = {
 
 
 AUTH_USER_MODEL = "accounts.User"
+SUBSCRIPTION_PRICE_CENTS = 100000
+
+##############paymob###############
+PAYMOB_BASE_URL = config(
+    "PAYMOB_BASE_URL",
+    default="https://accept.paymob.com",
+)
+PAYMOB_SECRET_KEY = config("PAYMOB_SECRET_KEY")
+PAYMOB_PUBLIC_KEY = config("PAYMOB_PUBLIC_KEY")
+PAYMOB_HMAC_SECRET = config("PAYMOB_HMAC_SECRET")
+PAYMOB_INTEGRATION_ID = config("PAYMOB_INTEGRATION_ID")
+PAYMOB_NOTIFICATION_URL = config("PAYMOB_NOTIFICATION_URL")
+PAYMOB_REDIRECTION_URL = config("PAYMOB_REDIRECTION_URL")
+
+####################################
 
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",

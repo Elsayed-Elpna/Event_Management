@@ -12,10 +12,9 @@ class UserAdmin(admin.ModelAdmin):
         "email",
         "first_name",
         "last_name",
-        "is_event_maker",
         "is_active",
     )
 
     search_fields = ("email", "first_name", "last_name")
 
-    list_filter = ("is_event_maker", "is_active")
+    list_filter = ("is_active",)

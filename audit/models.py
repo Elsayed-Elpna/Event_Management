@@ -9,11 +9,22 @@ from common.models import BaseModel
 class AuditLog(BaseModel):
     class AuditAction(models.TextChoices):
         EVENT_CREATED = "EVENT_CREATED", "Event Created"
+        EVENT_PUBLISHED = "EVENT_PUBLISHED", "Event Published"
+
+        TICKET_TYPE_CREATED = "TICKET_TYPE_CREATED", "Ticket Type Created"
+        INVENTORY_UPDATED = "INVENTORY_UPDATED", "Inventory Updated"
+
         RESERVATION_CREATED = "RESERVATION_CREATED", "Reservation Created"
         RESERVATION_EXPIRED = "RESERVATION_EXPIRED", "Reservation Expired"
+
         ORDER_PAID = "ORDER_PAID", "Order Paid"
+
         REFUND_CREATED = "REFUND_CREATED", "Refund Created"
-        INVENTORY_UPDATED = "INVENTORY_UPDATED", "Inventory Updated"
+
+        USER_REGISTERED = "USER_REGISTERED", "User Registered"
+
+        PAYMENT_SUCCESS = "PAYMENT_SUCCESS", "Payment Success"
+        SUBSCRIPTION_ACTIVATED = "SUBSCRIPTION_ACTIVATED", "Subscription Activated"
 
     actor = models.ForeignKey(
         settings.AUTH_USER_MODEL,

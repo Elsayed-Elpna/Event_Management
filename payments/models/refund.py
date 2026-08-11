@@ -16,12 +16,6 @@ class Refund(BaseModel):
         related_name="refund",
     )
 
-    payment = models.OneToOneField(
-        "payments.Payment",
-        on_delete=models.PROTECT,
-        related_name="refund",
-    )
-
     reason = models.TextField()
 
     status = models.CharField(

@@ -3,22 +3,37 @@ from rest_framework import serializers
 from events.models import Event
 
 
-class EventCreateSerializer(serializers.ModelSerializer):
+class EventSerializer(serializers.ModelSerializer):
     class Meta:
         model = Event
         fields = [
+            "id",
             "title",
             "description",
             "location",
+            "status",
             "starts_at",
             "ends_at",
             "hold_duration",
         ]
+        read_only_fields = ["id", "status"]
 
     def validate(self, attrs):
-        if attrs["starts_at"] >= attrs["ends_at"]:
+        if (
+            attrs.get("starts_at")
+            and attrs.get("ends_at")
+            and attrs["starts_at"] >= attrs["ends_at"]
+        ):
             raise serializers.ValidationError(
-                "Start date must be before end date",
+                "Event end time must be after start time."
+            )
+
+        if (
+            attrs.get("hold_duration") is not None
+            and attrs["hold_duration"] <= 0
+        ):
+            raise serializers.ValidationError(
+                "Hold duration must be greater than zero."
             )
 
         return attrs

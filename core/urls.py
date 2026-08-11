@@ -23,11 +23,27 @@ from django.contrib import admin
 from django.urls import path, include
 
 urlpatterns = [
+    # apps urls
+    path("admin/", admin.site.urls),
+    # accounts app urls
     # jwt  tokens
     path("api/token/", TokenObtainPairView.as_view(), name="token_obtain_pair"),
     path("api/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
-    # apps urls
-    path("admin/", admin.site.urls),
-    # events app urls
-    path("events/", include("events.urls")),
+    # register
+    path("api/", include("accounts.urls")),
+    # supscription
+    path(
+        "api/subscriptions/",
+        include("subscriptions.urls"),
+    ),
+    # payment // webhooks urls
+    path(
+        "api/payments/",
+        include("payments.urls"),
+    ),
+    # event api
+    path(
+        "api/events/",
+        include("events.urls"),
+    ),
 ]

@@ -46,4 +46,19 @@ urlpatterns = [
         "api/events/",
         include("events.urls"),
     ),
+    # reservation api
+    path(
+        "api/reservations/",
+        include("reservations.urls"),
+    ),
+    # order api
+    path(
+        "api/orders/",
+        include("orders.urls"),
+    ),
+    # earnings api
+    path(
+        "api/earnings/",
+        include("earnings.urls"),
+    ),
 ]

@@ -52,7 +52,8 @@ def create_subscription(*, user):
 
     paymob_response = paymob_service.create_payment_intention(
         amount_cents=price_cents,
-        reference_id=f"subscription-{subscription.id}",
+        # reference_id=f"subscription-{subscription.id}",
+        reference_id=f"subscription-{subscription.id}-payment-{payment.id}",
         items=items,
         billing_data=billing_data,
     )

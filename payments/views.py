@@ -1,11 +1,14 @@
 from django.shortcuts import render
 
-# Create your views here.
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
+
 from .services.paymob_service import PaymobService
 from .services.payments_webhook_service import process_successful_payment
+from .services.order_payment_webhook_service import (
+    process_successful_order_payment,
+)
 
 
 class PaymobWebhookAPIView(APIView):
@@ -49,16 +52,53 @@ class PaymobWebhookAPIView(APIView):
                 status=status.HTTP_200_OK,
             )
 
-        subscription = process_successful_payment(
-            transaction_data=transaction_data,
-        )
+        merchant_order_id = transaction_data["order"]["merchant_order_id"]
+
+        # ---------------------------------
+        # Subscription Payment
+        # ---------------------------------
+
+        if merchant_order_id.startswith("subscription-"):
+
+            subscription = process_successful_payment(
+                transaction_data=transaction_data,
+            )
+
+            return Response(
+                {
+                    "status": "payment_processed",
+                    "payment_type": "subscription",
+                    "subscription_id": subscription.id,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        # ---------------------------------
+        # Order Payment
+        # ---------------------------------
+
+        elif merchant_order_id.startswith("order-"):
+
+            order = process_successful_order_payment(
+                transaction_data=transaction_data,
+            )
+
+            return Response(
+                {
+                    "status": "payment_processed",
+                    "payment_type": "order",
+                    "order_id": order.id,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        # ---------------------------------
+        # Unsupported Payment
+        # ---------------------------------
 
         return Response(
-            {
-                "status": "payment_processed",
-                "subscription_id": subscription.id,
-            },
-            status=status.HTTP_200_OK,
+            {"detail": "Unsupported merchant order."},
+            status=status.HTTP_400_BAD_REQUEST,
         )
 
     def get(self, request):

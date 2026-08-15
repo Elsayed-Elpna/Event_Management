@@ -6,6 +6,8 @@ from .views.eventview import (
     PublishEventAPIView,
 )
 
+from .views.ticket_type_view import TicketTypeCreateAPIView, TicketTypeUpdateAPIView
+
 urlpatterns = [
     path(
         "",
@@ -26,5 +28,18 @@ urlpatterns = [
         "<int:event_id>/publish/",
         PublishEventAPIView.as_view(),
         name="event-publish",
+    ),
+    ############################
+    # ticket types view
+    ############################
+    path(
+        "<int:event_id>/ticket/",
+        TicketTypeCreateAPIView.as_view(),
+        name="ticket-types",
+    ),
+    path(
+        "<int:ticket_type_id>/update-ticket/",
+        TicketTypeUpdateAPIView.as_view(),
+        name="ticket-type-update",
     ),
 ]

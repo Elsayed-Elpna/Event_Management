@@ -16,10 +16,21 @@ class AuditLog(BaseModel):
 
         RESERVATION_CREATED = "RESERVATION_CREATED", "Reservation Created"
         RESERVATION_EXPIRED = "RESERVATION_EXPIRED", "Reservation Expired"
+        RESERVATION_CANCELLED = (
+            "RESERVATION_CANCELLED",
+            "Reservation Cancelled",
+        )
 
+        ORDER_CREATED = "ORDER_CREATED", "Order Created"
         ORDER_PAID = "ORDER_PAID", "Order Paid"
+        ORDER_FAILED = "ORDER_FAILED", "Order Failed"
+        EARNING_CREATED = "EARNING_CREATED", "Earning Created"
 
         REFUND_CREATED = "REFUND_CREATED", "Refund Created"
+
+        EVENT_FINISHED = "EVENT_FINISHED", "Event Finished"
+
+        SUBSCRIPTION_EXPIRED = "SUBSCRIPTION_EXPIRED", "Subscription Expired"
 
         USER_REGISTERED = "USER_REGISTERED", "User Registered"
 

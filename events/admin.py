@@ -27,11 +27,14 @@ class EventAdmin(admin.ModelAdmin):
 class TicketTypeAdmin(admin.ModelAdmin):
     list_display = (
         "id",
-        "name",
+        "ticket_type",
         "event",
         "price_cents",
         "capacity",
         "available_inventory",
     )
 
-    search_fields = ("name", "event__title")
+    search_fields = (
+        "event__title",
+        "event__organizer__email",
+    )

@@ -1,9 +1,12 @@
 from rest_framework import serializers
 
 from events.models import Event
+from events.serializers.ticket_type_serializer import TicketTypeSerializer
 
 
 class EventSerializer(serializers.ModelSerializer):
+    ticket_types = TicketTypeSerializer(many=True, read_only=True)
+
     class Meta:
         model = Event
         fields = [
@@ -15,8 +18,9 @@ class EventSerializer(serializers.ModelSerializer):
             "starts_at",
             "ends_at",
             "hold_duration",
+            "ticket_types",
         ]
-        read_only_fields = ["id", "status"]
+        read_only_fields = ["id", "status", "ticket_types"]
 
     def validate(self, attrs):
         if (
@@ -28,34 +32,9 @@ class EventSerializer(serializers.ModelSerializer):
                 "Event end time must be after start time."
             )
 
-        if (
-            attrs.get("hold_duration") is not None
-            and attrs["hold_duration"] <= 0
-        ):
+        if attrs.get("hold_duration") is not None and attrs["hold_duration"] <= 0:
             raise serializers.ValidationError(
                 "Hold duration must be greater than zero."
             )
 
         return attrs
-
-
-class EventReadSerializer(serializers.ModelSerializer):
-    organizer = serializers.EmailField(
-        source="organizer.email",
-        read_only=True,
-    )
-
-    class Meta:
-        model = Event
-        fields = [
-            "id",
-            "title",
-            "description",
-            "location",
-            "status",
-            "starts_at",
-            "ends_at",
-            "hold_duration",
-            "organizer",
-            "created_at",
-        ]

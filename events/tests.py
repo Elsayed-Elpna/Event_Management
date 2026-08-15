@@ -232,7 +232,7 @@ class EventAPITestCase(APITestCase):
 
         TicketType.objects.create(
             event=event,
-            name="Regular",
+            ticket_type="REGULAR",
             price_cents=100000,
             capacity=100,
             available_inventory=100,
@@ -268,6 +268,279 @@ class EventAPITestCase(APITestCase):
 
         response = self.client.post(
             f"/api/events/{event.id}/publish/",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+
+#################################################
+###ticket test case
+
+
+class TicketTypeAPITestCase(APITestCase):
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email="maker@test.com",
+            password="TestPassword123",
+            is_event_maker=True,
+        )
+
+        Subscription.objects.create(
+            user=self.user,
+            amount_cents=100000,
+            status=SubscriptionStatus.ACTIVE,
+        )
+
+        self.event = Event.objects.create(
+            organizer=self.user,
+            title="Django Conference",
+            description="Backend event",
+            location="Cairo",
+            status=EventStatus.DRAFT,
+            starts_at="2026-09-01T18:00:00Z",
+            ends_at="2026-09-01T22:00:00Z",
+            hold_duration=10,
+        )
+
+        self.client.force_authenticate(user=self.user)
+
+        self.ticket_data = {
+            "ticket_type": "REGULAR",
+            "price_cents": 100000,
+            "capacity": 100,
+        }
+
+    def test_create_regular_ticket(self):
+        response = self.client.post(
+            f"/api/events/{self.event.id}/ticket-types/",
+            self.ticket_data,
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED,
+        )
+
+        ticket = TicketType.objects.get()
+
+        self.assertEqual(
+            ticket.ticket_type,
+            TicketType.TicketTypeChoice.REGULAR,
+        )
+
+        self.assertEqual(
+            ticket.capacity,
+            100,
+        )
+
+        self.assertEqual(
+            ticket.available_inventory,
+            100,
+        )
+
+    def test_create_vip_ticket(self):
+        response = self.client.post(
+            f"/api/events/{self.event.id}/ticket-types/",
+            {
+                "ticket_type": "VIP",
+                "price_cents": 200000,
+                "capacity": 20,
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED,
+        )
+
+        ticket = TicketType.objects.get()
+
+        self.assertEqual(
+            ticket.ticket_type,
+            TicketType.TicketTypeChoice.VIP,
+        )
+
+    def test_cannot_create_duplicate_ticket_type(self):
+        TicketType.objects.create(
+            event=self.event,
+            ticket_type=TicketType.TicketTypeChoice.REGULAR,
+            price_cents=100000,
+            capacity=100,
+            available_inventory=100,
+        )
+
+        response = self.client.post(
+            f"/api/events/{self.event.id}/ticket-types/",
+            self.ticket_data,
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+    def test_invalid_ticket_type(self):
+        response = self.client.post(
+            f"/api/events/{self.event.id}/ticket-types/",
+            {
+                "ticket_type": "PREMIUM",
+                "price_cents": 100000,
+                "capacity": 100,
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+    def test_invalid_price(self):
+        response = self.client.post(
+            f"/api/events/{self.event.id}/ticket-types/",
+            {
+                "ticket_type": "REGULAR",
+                "price_cents": 0,
+                "capacity": 100,
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+    def test_invalid_capacity(self):
+        response = self.client.post(
+            f"/api/events/{self.event.id}/ticket-types/",
+            {
+                "ticket_type": "REGULAR",
+                "price_cents": 100000,
+                "capacity": 0,
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+    def test_normal_user_cannot_create_ticket(self):
+        user = User.objects.create_user(
+            email="user@test.com",
+            password="TestPassword123",
+            is_event_maker=False,
+        )
+
+        self.client.force_authenticate(user=user)
+
+        response = self.client.post(
+            f"/api/events/{self.event.id}/ticket-types/",
+            self.ticket_data,
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+
+    def test_other_event_maker_cannot_create_ticket(self):
+        other_user = User.objects.create_user(
+            email="other@test.com",
+            password="TestPassword123",
+            is_event_maker=True,
+        )
+
+        self.client.force_authenticate(user=other_user)
+
+        response = self.client.post(
+            f"/api/events/{self.event.id}/ticket-types/",
+            self.ticket_data,
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+
+    def test_cannot_create_ticket_for_published_event(self):
+        self.event.status = Event.EventStatus.PUBLISHED
+        self.event.save(update_fields=["status"])
+
+        response = self.client.post(
+            f"/api/events/{self.event.id}/ticket-types/",
+            self.ticket_data,
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+    def test_update_capacity(self):
+        ticket = TicketType.objects.create(
+            event=self.event,
+            ticket_type=TicketType.TicketTypeChoice.REGULAR,
+            price_cents=100000,
+            capacity=100,
+            available_inventory=100,
+        )
+
+        response = self.client.patch(
+            f"/api/ticket-types/{ticket.id}/",
+            {
+                "capacity": 150,
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+        )
+
+        ticket.refresh_from_db()
+
+        self.assertEqual(
+            ticket.capacity,
+            150,
+        )
+
+        self.assertEqual(
+            ticket.available_inventory,
+            150,
+        )
+
+    def test_cannot_update_published_ticket(self):
+        ticket = TicketType.objects.create(
+            event=self.event,
+            ticket_type=TicketType.TicketTypeChoice.REGULAR,
+            price_cents=100000,
+            capacity=100,
+            available_inventory=100,
+        )
+
+        self.event.status = Event.EventStatus.PUBLISHED
+        self.event.save(update_fields=["status"])
+
+        response = self.client.patch(
+            f"/api/ticket-types/{ticket.id}/",
+            {
+                "price_cents": 150000,
+            },
+            format="json",
         )
 
         self.assertEqual(

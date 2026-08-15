@@ -39,6 +39,13 @@ class PaymobService:
             timeout=10,
         )
 
+        # response.raise_for_status()
+
+        # return response.json()
+        if not response.ok:
+            print("PAYMOB STATUS:", response.status_code)
+            print("PAYMOB RESPONSE:", response.text)
+
         response.raise_for_status()
 
         return response.json()
@@ -90,3 +97,64 @@ class PaymobService:
             calculated_hmac,
             received_hmac,
         )
+
+    # order
+
+    def create_order_intention(self, *, order):
+        items = [
+            {
+                "name": order.reservation.ticket_type.ticket_type,
+                "amount": order.unit_price,
+                "description": order.reservation.ticket_type.event.title,
+                "quantity": order.quantity,
+            }
+        ]
+
+        billing_data = {
+            "apartment": "NA",
+            "first_name": order.user.first_name or "User",
+            "last_name": order.user.last_name or "User",
+            "street": "NA",
+            "building": "NA",
+            "phone_number": "+201000000000",
+            "city": "Cairo",
+            "country": "EG",
+            "email": order.user.email,
+            "floor": "NA",
+            "state": "Cairo",
+        }
+
+        return self.create_payment_intention(
+            amount_cents=order.payment.amount,
+            reference_id=f"order-{order.id}-payment-{order.payment.id}",
+            items=items,
+            billing_data=billing_data,
+        )
+
+
+    def create_refund(self, *, transaction_id, amount_cents, description):
+        url = f"{settings.PAYMOB_BASE_URL}/api/acceptance/void_refund/refund"
+
+        payload = {
+            "transaction_id": str(transaction_id),
+            "amount_cents": amount_cents,
+        }
+
+        response = requests.post(
+            url,
+            json=payload,
+            headers={
+                "Authorization": f"Token {settings.PAYMOB_SECRET_KEY}",
+                "Content-Type": "application/json",
+            },
+            timeout=10,
+        )
+
+        if not response.ok:
+            print("PAYMOB REFUND STATUS:", response.status_code)
+            print("PAYMOB REFUND RESPONSE:", response.text)
+            raise ValueError(
+                f"Paymob refund failed: {response.status_code} {response.text}"
+            )
+
+        return response.json()

@@ -15,18 +15,24 @@ def process_successful_payment(*, transaction_data):
     if not merchant_order_id.startswith("subscription-"):
         raise ValueError("Unsupported merchant order")
 
-    subscription_id = merchant_order_id.split("-")[-1]
+    parts = merchant_order_id.split("-")
+
+    if len(parts) != 4:
+        raise ValueError("Invalid subscription merchant order")
+
+    subscription_id = parts[1]
+    payment_id = parts[3]
 
     subscription = (
-        # Subscription.objects.select_for_update()
-        # .select_related("payment")
-        # .get(id=subscription_id)
         Subscription.objects.select_for_update(of=("self",))
         .select_related("payment")
         .get(id=subscription_id)
     )
 
     payment = subscription.payment
+
+    if payment.id != int(payment_id):
+        raise ValueError("Payment does not belong to subscription")
 
     if payment.amount != transaction_data["amount_cents"]:
         raise ValueError("Payment amount mismatch")

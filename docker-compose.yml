@@ -42,6 +42,63 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7
+    container_name: event_redis
+
+    restart: unless-stopped
+
+    ports:
+      - "6379:6379"
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  celery-worker:
+    build: .
+    container_name: event_celery_worker
+
+    restart: unless-stopped
+
+    command: python -m celery -A core worker -l info --concurrency=2 --max-tasks-per-child=500
+
+    env_file:
+      - .env
+
+    volumes:
+      - .:/app
+
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery-beat:
+    build: .
+    container_name: event_celery_beat
+
+    restart: unless-stopped
+
+    command: python -m celery -A core beat -l info
+
+    env_file:
+      - .env
+
+    volumes:
+      - .:/app
+
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
 volumes:
   postgres_data:

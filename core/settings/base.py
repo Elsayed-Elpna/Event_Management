@@ -55,6 +55,7 @@ INSTALLED_APPS = [
     "common",
     "subscriptions",
     "earnings",
+    "jobs",
 ]
 
 
@@ -74,6 +75,37 @@ SIMPLE_JWT = {
 
 AUTH_USER_MODEL = "accounts.User"
 SUBSCRIPTION_PRICE_CENTS = 100000
+
+##############celery & redis###############
+REDIS_URL = config("REDIS_URL", default="redis://redis:6379/0")
+
+CELERY_BROKER_URL = config("CELERY_BROKER_URL", default=REDIS_URL)
+CELERY_RESULT_BACKEND = config("CELERY_RESULT_BACKEND", default=REDIS_URL)
+CELERY_TIMEZONE = "UTC"
+CELERY_TASK_ALWAYS_EAGER = config(
+    "CELERY_TASK_ALWAYS_EAGER",
+    default=False,
+    cast=bool,
+)
+
+CELERY_BEAT_SCHEDULE = {
+    "expire-subscriptions": {
+        "task": "jobs.tasks.expire_subscriptions",
+        "schedule": 3600.0,
+    },
+    "finish-events": {
+        "task": "jobs.tasks.finish_events",
+        "schedule": 60.0,
+    },
+    "expire-reservations": {
+        "task": "jobs.tasks.expire_reservations",
+        "schedule": 30.0,
+    },
+    "fail-expired-orders": {
+        "task": "jobs.tasks.fail_expired_orders",
+        "schedule": 30.0,
+    },
+}
 
 ##############paymob###############
 PAYMOB_BASE_URL = config(

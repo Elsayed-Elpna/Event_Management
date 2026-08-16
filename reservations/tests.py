@@ -9,6 +9,10 @@ from events.models import Event, TicketType
 from events.models.event import EventStatus
 from reservations.models import Reservation
 from subscriptions.models import Subscription, SubscriptionStatus
+from concurrent.futures import ThreadPoolExecutor
+from django.test import TransactionTestCase
+from reservations.services import create_reservation
+from django.db import connection
 
 
 class ReservationAPITestCase(APITestCase):
@@ -345,20 +349,96 @@ class ReservationAPITestCase(APITestCase):
         )
 
     def test_cannot_cancel_confirmed_reservation(self):
-      reservation = Reservation.objects.create(
-          user=self.user,
-          ticket_type=self.ticket_type,
-          quantity=2,
-          expires_at=timezone.now() + timedelta(minutes=10),
-          status=Reservation.ReservationStatus.CONFIRMED,
-          reserved_unit_price=100000,
-      )
+        reservation = Reservation.objects.create(
+            user=self.user,
+            ticket_type=self.ticket_type,
+            quantity=2,
+            expires_at=timezone.now() + timedelta(minutes=10),
+            status=Reservation.ReservationStatus.CONFIRMED,
+            reserved_unit_price=100000,
+        )
 
-      response = self.client.post(
-          f"/api/reservations/{reservation.id}/cancel/"
-      )
+        response = self.client.post(f"/api/reservations/{reservation.id}/cancel/")
 
-      self.assertEqual(
-          response.status_code,
-          status.HTTP_400_BAD_REQUEST,
-      )
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+
+# concurrency test
+
+
+class OversellConcurrencyTest(TransactionTestCase):
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email="racer@test.com",
+            password="TestPassword123",
+            is_event_maker=False,
+        )
+
+        self.event_maker = User.objects.create_user(
+            email="racermaker@test.com",
+            password="TestPassword123",
+            is_event_maker=True,
+        )
+
+        Subscription.objects.create(
+            user=self.event_maker,
+            amount_cents=100000,
+            status=SubscriptionStatus.ACTIVE,
+        )
+
+        self.event = Event.objects.create(
+            organizer=self.event_maker,
+            title="Oversell Test Event",
+            description="Concurrency test event",
+            location="Cairo",
+            status=EventStatus.PUBLISHED,
+            starts_at=timezone.now() + timedelta(days=1),
+            ends_at=timezone.now() + timedelta(days=1, hours=4),
+            hold_duration=10,
+        )
+
+        # 10 tickets only
+        self.ticket_type = TicketType.objects.create(
+            event=self.event,
+            ticket_type=TicketType.TicketTypeChoice.REGULAR,
+            price_cents=100000,
+            capacity=10,
+            available_inventory=10,
+        )
+
+    def test_no_oversell_under_concurrent_requests(self):
+        attempts = 20  # 20 threads racing for 10 tickets
+
+        def attempt(_):
+            try:
+                create_reservation(
+                    user=self.user,
+                    validated_data={
+                        "ticket_type": self.ticket_type,
+                        "quantity": 1,
+                    },
+                )
+                return "succeeded"
+            except ValueError:
+                return "denied"
+
+        with ThreadPoolExecutor(max_workers=attempts) as executor:
+            results = list(executor.map(attempt, range(attempts)))
+
+        self.ticket_type.refresh_from_db()
+
+        succeeded = results.count("succeeded")
+        denied = results.count("denied")
+
+        # Exactly 10 of 20 racing requests win the row lock in time
+        self.assertEqual(succeeded, 10)
+        self.assertEqual(denied, 10)
+        # Inventory can never go negative
+        self.assertGreaterEqual(self.ticket_type.available_inventory, 0)
+        self.assertEqual(self.ticket_type.available_inventory, 0)
+        # One reservation row per successful hold, no duplicates
+        self.assertEqual(Reservation.objects.count(), 10)

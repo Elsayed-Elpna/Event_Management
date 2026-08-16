@@ -12,6 +12,9 @@ env/
 # Environment Variables
 .env
 
+# Confidential project brief
+Event_Management_Backend_Project_Brief_Intern.pdf
+
 # Django
 db.sqlite3
 media/
@@ -47,7 +50,7 @@ dist/
 *.egg-info/
 
 # Celery
-celerybeat-schedule
+celerybeat-schedule*
 
 # Docker
 *.pid

@@ -22,7 +22,11 @@ from rest_framework_simplejwt.views import (
 from django.contrib import admin
 from django.urls import path, include
 
+from core.health import health
+
 urlpatterns = [
+    # health check
+    path("health/", health, name="health"),
     # apps urls
     path("admin/", admin.site.urls),
     # accounts app urls

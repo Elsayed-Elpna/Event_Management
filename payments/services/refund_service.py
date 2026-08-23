@@ -1,5 +1,8 @@
 import requests
 
+from datetime import timedelta
+
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
@@ -8,6 +11,7 @@ from events.models.ticket_type import TicketType
 from orders.models import Order
 from payments.models import Payment, Refund
 from payments.services.paymob_service import PaymobService
+from reservations.models import Reservation
 
 
 class TransientProviderError(Exception):
@@ -52,6 +56,16 @@ def process_order_refund(*, user, order_id, reason):
         or order.payment.status != Payment.PaymentStatus.SUCCESS
     ):
         raise ValueError("Order does not have a successful payment to refund.")
+
+    event = order.reservation.ticket_type.event
+
+    if timezone.now() >= event.starts_at - timedelta(
+        hours=settings.REFUND_CUTOFF_HOURS
+    ):
+        raise ValueError(
+            f"Refunds are closed within {settings.REFUND_CUTOFF_HOURS} hours "
+            "of the event start."
+        )
 
     # ---------------------------------
     # 2. Record refund intent as PENDING and release locks.
@@ -197,6 +211,20 @@ def _complete_refund(*, context):
         ]
     )
 
+    reservation = Reservation.objects.select_for_update().get(
+        id=order.reservation_id
+    )
+
+    if reservation.status != Reservation.ReservationStatus.CANCELLED:
+        reservation.status = Reservation.ReservationStatus.CANCELLED
+
+        reservation.save(
+            update_fields=[
+                "status",
+                "updated_at",
+            ]
+        )
+
     order.payment.status = Payment.PaymentStatus.REFUNDED
 
     order.payment.save(
@@ -249,11 +277,12 @@ def _complete_refund(*, context):
         action=AuditLog.AuditAction.REFUND_CREATED,
         entity_type="Order",
         entity_id=order.id,
-        reason=f"Full refund confirmed by provider. Reason: {refund.reason}",
+        reason=f"Full refund confirmed by provider; reservation cancelled. Reason: {refund.reason}",
         metadata={
             "refund_id": refund.id,
             "order_id": order.id,
             "payment_id": order.payment.id,
+            "reservation_id": order.reservation_id,
             "amount_cents": order.payment.amount,
             "quantity": order.quantity,
         },

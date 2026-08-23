@@ -38,8 +38,8 @@ class EarningAPITestCase(APITestCase):
             description="Backend event",
             location="Cairo",
             status=EventStatus.PUBLISHED,
-            starts_at=timezone.now() + timedelta(days=1),
-            ends_at=timezone.now() + timedelta(days=1, hours=4),
+            starts_at=timezone.now() + timedelta(days=3),
+            ends_at=timezone.now() + timedelta(days=3, hours=4),
             hold_duration=10,
         )
 

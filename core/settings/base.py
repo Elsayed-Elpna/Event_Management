@@ -166,6 +166,10 @@ DATABASES = {
     }
 }
 
+# Refunds are blocked within this many hours before the event starts
+# (and after it has started). Applies to buyers, organizers, and staff.
+REFUND_CUTOFF_HOURS = config("REFUND_CUTOFF_HOURS", default=48, cast=int)
+
 
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators

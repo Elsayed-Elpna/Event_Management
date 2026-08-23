@@ -23,6 +23,7 @@ from orders.service import (
     _save_payment_intention,
 )
 from payments.models import Payment, Refund
+from reservations.models import Reservation
 from payments.services.order_payment_webhook_service import (
     process_successful_order_payment,
 )
@@ -66,8 +67,8 @@ class RefundAPITestCase(APITestCase):
             description="Backend event",
             location="Cairo",
             status=EventStatus.PUBLISHED,
-            starts_at=timezone.now() + timedelta(days=1),
-            ends_at=timezone.now() + timedelta(days=1, hours=4),
+            starts_at=timezone.now() + timedelta(days=3),
+            ends_at=timezone.now() + timedelta(days=3, hours=4),
             hold_duration=10,
         )
 
@@ -431,8 +432,8 @@ class OrderPaymentAPITestCase(APITestCase):
             description="Backend event",
             location="Cairo",
             status=EventStatus.PUBLISHED,
-            starts_at=timezone.now() + timedelta(days=1),
-            ends_at=timezone.now() + timedelta(days=1, hours=4),
+            starts_at=timezone.now() + timedelta(days=3),
+            ends_at=timezone.now() + timedelta(days=3, hours=4),
             hold_duration=10,
         )
 
@@ -590,3 +591,83 @@ class OrderPaymentAPITestCase(APITestCase):
 
         self.assertEqual(winner.provider_reference, "winner-ref")
         self.assertEqual(winner.client_secret, "winner-secret")
+
+
+class RefundCutoffTestCase(RefundAPITestCase):
+    """
+    Refunds are blocked for everyone (buyers, organizers, staff) within
+    REFUND_CUTOFF_HOURS of the event start, and after the event started.
+    """
+
+    def _set_event_start(self, **delta):
+        self.event.starts_at = timezone.now() + timedelta(**delta)
+        self.event.ends_at = self.event.starts_at + timedelta(hours=4)
+        self.event.save(
+            update_fields=[
+                "starts_at",
+                "ends_at",
+                "updated_at",
+            ]
+        )
+
+    def test_buyer_cannot_refund_inside_cutoff_window(self):
+        self._set_event_start(days=1)
+
+        order = self.make_paid_order()
+
+        response = self.refund(order.id)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Refunds are closed", response.data["detail"])
+        self.assertFalse(Refund.objects.filter(order_id=order.id).exists())
+
+    def test_buyer_cannot_refund_after_event_started(self):
+        self._set_event_start(hours=-1)
+
+        order = self.make_paid_order()
+
+        response = self.refund(order.id)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Refunds are closed", response.data["detail"])
+
+    def test_buyer_can_refund_outside_cutoff_window(self):
+        self._set_event_start(days=3, hours=1)
+
+        order = self.make_paid_order()
+
+        response = self.refund(order.id)
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    def test_organizer_also_blocked_inside_cutoff_window(self):
+        self._set_event_start(days=1)
+
+        order = self.make_paid_order(user=self.user)
+
+        self.client.force_authenticate(user=self.event_maker)
+
+        response = self.refund(order.id)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Refunds are closed", response.data["detail"])
+
+    def test_successful_refund_cancels_reservation(self):
+        order = self.make_paid_order()
+
+        response = self.refund(order.id)
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        order.reservation.refresh_from_db()
+
+        self.assertEqual(
+            order.reservation.status,
+            Reservation.ReservationStatus.CANCELLED,
+        )
+        self.assertTrue(
+            Refund.objects.filter(
+                order_id=order.id,
+                status=Refund.RefundStatus.SUCCESS,
+            ).exists()
+        )

@@ -54,7 +54,7 @@ INSTALLED_APPS = [
     "reservations",
     "common",
     "subscriptions",
-    "earnings",
+    "balance",
     "jobs",
 ]
 

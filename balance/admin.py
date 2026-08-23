@@ -1,14 +1,13 @@
 from django.contrib import admin
-from .models import Earning
-
-# Register your models here.
+from .models import Balance
 
 
-@admin.register(Earning)
-class EarningsAdmin(admin.ModelAdmin):
+@admin.register(Balance)
+class BalanceAdmin(admin.ModelAdmin):
     list_display = (
         "id",
         "order",
+        "organizer",
         "gross_amount",
         "platform_fee",
         "payment_fee",
@@ -16,6 +15,7 @@ class EarningsAdmin(admin.ModelAdmin):
     )
     list_select_related = ("order__reservation", "order__user")
     search_fields = (
+        "organizer__email",
         "order__user__email",
         "order__user__first_name",
         "order__user__last_name",

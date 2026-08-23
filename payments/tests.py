@@ -14,7 +14,7 @@ from rest_framework.test import APITestCase
 
 from accounts.models import User
 from audit.models import AuditLog
-from earnings.models import Earning
+from balance.models import Balance
 from events.models import Event, TicketType
 from events.models.event import EventStatus
 from orders.models import Order
@@ -187,22 +187,22 @@ class RefundAPITestCase(APITestCase):
 
         self.assertEqual(self.ticket_type.available_inventory, 100)
 
-    def test_refund_zeroes_earning(self):
+    def test_refund_zeroes_balance(self):
         order = self.make_paid_order()
 
-        earning = Earning.objects.get(order=order)
-        self.assertEqual(earning.gross_amount, order.total_price)
+        balance = Balance.objects.get(order=order)
+        self.assertEqual(balance.gross_amount, order.total_price)
 
         self.client.force_authenticate(user=self.event_maker)
 
         self.refund(order.id)
 
-        earning.refresh_from_db()
+        balance.refresh_from_db()
 
-        self.assertEqual(earning.gross_amount, 0)
-        self.assertEqual(earning.platform_fee, 0)
-        self.assertEqual(earning.payment_fee, 0)
-        self.assertEqual(earning.net_amount, 0)
+        self.assertEqual(balance.gross_amount, 0)
+        self.assertEqual(balance.platform_fee, 0)
+        self.assertEqual(balance.payment_fee, 0)
+        self.assertEqual(balance.net_amount, 0)
 
     def test_refund_creates_audit_logs(self):
         order = self.make_paid_order()
@@ -366,8 +366,8 @@ class RefundProviderFailureTestCase(RefundAPITestCase):
         )
         self.assertEqual(self.ticket_type.available_inventory, 98)
 
-        earning = Earning.objects.get(order=order)
-        self.assertEqual(earning.gross_amount, order.total_price)
+        balance = Balance.objects.get(order=order)
+        self.assertEqual(balance.gross_amount, order.total_price)
 
         self.assertTrue(
             AuditLog.objects.filter(

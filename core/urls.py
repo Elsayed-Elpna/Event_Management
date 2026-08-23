@@ -60,9 +60,9 @@ urlpatterns = [
         "api/orders/",
         include("orders.urls"),
     ),
-    # earnings api
+    # balance api
     path(
-        "api/earnings/",
-        include("earnings.urls"),
+        "api/balance/",
+        include("balance.urls"),
     ),
 ]

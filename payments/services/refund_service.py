@@ -254,15 +254,15 @@ def _complete_refund(*, context):
         ]
     )
 
-    earning = getattr(order, "earning", None)
+    balance = getattr(order, "balance", None)
 
-    if earning:
-        earning.gross_amount = 0
-        earning.platform_fee = 0
-        earning.payment_fee = 0
-        earning.net_amount = 0
+    if balance:
+        balance.gross_amount = 0
+        balance.platform_fee = 0
+        balance.payment_fee = 0
+        balance.net_amount = 0
 
-        earning.save(
+        balance.save(
             update_fields=[
                 "gross_amount",
                 "platform_fee",

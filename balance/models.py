@@ -1,21 +1,20 @@
 from django.db import models
 from django.conf import settings
+
 from common.models import BaseModel
 
-# Create your models here.
 
-
-class Earning(BaseModel):
+class Balance(BaseModel):
     organizer = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
-        related_name="earnings",
+        related_name="balances",
     )
 
     order = models.OneToOneField(
         "orders.Order",
         on_delete=models.PROTECT,
-        related_name="earning",
+        related_name="balance",
     )
 
     gross_amount = models.PositiveIntegerField()
@@ -27,4 +26,4 @@ class Earning(BaseModel):
     net_amount = models.PositiveIntegerField()
 
     def __str__(self):
-        return f"Order #{self.order_id}"
+        return f"Balance for order #{self.order_id}"

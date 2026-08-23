@@ -149,7 +149,7 @@ All routes are prefixed with `/api`.
 | POST   | `/api/orders/<id>/refund/`            | Yes  | Full-order refund                                |
 | POST   | `/api/subscriptions/`                 | Yes  | Create subscription                              |
 | GET    | `/api/subscriptions/me/`              | Yes  | My subscription                                  |
-| GET    | `/api/earnings/`                      | Yes  | My earnings                                      |
+| GET    | `/api/balance/`                       | Yes  | My balance (sales + totals)                      |
 | POST   | `/api/payments/webhook/`              | No   | Paymob webhook (HMAC verified)                   |
 
 ### Example: reservation -> order -> payment
@@ -301,7 +301,7 @@ reservations/   Reservation holds, expiry, cancellation
 orders/         Idempotent order creation, payment initiation, refunds
 payments/       Payment/refund models, Paymob integration + webhook
 subscriptions/  Organizer subscriptions
-earnings/       Organizer earnings from paid orders
+balance/        Organizer balance from paid orders (sales ledger + totals)
 audit/          AuditLog for every inventory/order lifecycle event
 jobs/           Celery tasks + expiry services
 common/         Shared base model

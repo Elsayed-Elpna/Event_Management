@@ -1,12 +1,12 @@
 from datetime import timedelta
 from uuid import uuid4
 
-from django.test import TestCase
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from accounts.models import User
+from balance.models import Balance
 from events.models import Event, TicketType
 from events.models.event import EventStatus
 from orders.service import create_order
@@ -17,7 +17,7 @@ from payments.services.order_payment_webhook_service import (
 from reservations.services import create_reservation
 
 
-class EarningAPITestCase(APITestCase):
+class BalanceAPITestCase(APITestCase):
 
     def setUp(self):
         self.organizer = User.objects.create_user(
@@ -73,6 +73,8 @@ class EarningAPITestCase(APITestCase):
             payment_type=Payment.PaymentType.ORDER,
             amount=order.total_price,
             status=Payment.PaymentStatus.PENDING,
+            provider_reference=f"intention-{order.id}",
+            client_secret="test-secret",
         )
 
         order.payment = payment
@@ -93,14 +95,14 @@ class EarningAPITestCase(APITestCase):
 
         return order
 
-    def get_earnings(self):
+    def get_balance(self):
         self.client.force_authenticate(user=self.organizer)
-        return self.client.get("/api/earnings/")
+        return self.client.get("/api/balance/")
 
     def test_organizer_sees_their_sales(self):
         order = self.make_paid_order(quantity=2)
 
-        response = self.get_earnings()
+        response = self.get_balance()
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data["records"]), 1)
@@ -110,11 +112,27 @@ class EarningAPITestCase(APITestCase):
         self.assertEqual(record["order_id"], order.id)
         self.assertEqual(record["event_title"], self.event.title)
         self.assertEqual(record["quantity"], 2)
+        self.assertEqual(record["unit_price"], order.unit_price)
         self.assertEqual(record["gross_amount"], order.total_price)
         self.assertEqual(
             record["net_amount"],
             order.total_price - order.platform_fee - order.payment_fee,
         )
+        self.assertIsNotNone(record["event_starts_at"])
+
+    def test_record_includes_transaction_data_for_paymob_verification(self):
+        order = self.make_paid_order(quantity=1)
+
+        response = self.get_balance()
+
+        record = response.data["records"][0]
+
+        self.assertEqual(record["transaction_id"], "123456")
+        self.assertIsNotNone(record["intention_reference"])
+        self.assertEqual(record["payment_status"], Payment.PaymentStatus.SUCCESS)
+        self.assertIsNotNone(record["paid_at"])
+        self.assertIsNone(record["refunded_at"])
+        self.assertEqual(record["order_id"], order.id)
 
     def test_organizer_only_sees_own_sales(self):
         other_organizer = User.objects.create_user(
@@ -127,7 +145,7 @@ class EarningAPITestCase(APITestCase):
 
         self.client.force_authenticate(user=other_organizer)
 
-        response = self.client.get("/api/earnings/")
+        response = self.client.get("/api/balance/")
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data["records"]), 0)
@@ -139,7 +157,7 @@ class EarningAPITestCase(APITestCase):
     def test_summary_this_month_and_all_time(self):
         self.make_paid_order(quantity=2)
 
-        response = self.get_earnings()
+        response = self.get_balance()
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
@@ -154,16 +172,16 @@ class EarningAPITestCase(APITestCase):
         self.assertEqual(summary["all_time"]["total_tickets_sold"], 2)
 
     def test_summary_excludes_refunded_orders(self):
-        order = self.make_paid_order(quantity=2)
+        self.make_paid_order(quantity=2)
 
-        earning = order.earning
-        earning.gross_amount = 0
-        earning.platform_fee = 0
-        earning.payment_fee = 0
-        earning.net_amount = 0
-        earning.save()
+        balance = Balance.objects.get()
+        balance.gross_amount = 0
+        balance.platform_fee = 0
+        balance.payment_fee = 0
+        balance.net_amount = 0
+        balance.save()
 
-        response = self.get_earnings()
+        response = self.get_balance()
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
@@ -174,6 +192,6 @@ class EarningAPITestCase(APITestCase):
         self.assertEqual(summary["net_amount"], 0)
 
     def test_requires_auth(self):
-        response = self.client.get("/api/earnings/")
+        response = self.client.get("/api/balance/")
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)

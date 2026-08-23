@@ -1,5 +1,3 @@
-from datetime import timedelta
-
 from django.db.models import Count, Sum
 from django.utils import timezone
 
@@ -8,13 +6,11 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Earning
-from .serializers import EarningSerializer
-
-# Create your views here.
+from .models import Balance
+from .serializers import BalanceRecordSerializer
 
 
-class MyEarningsAPIView(APIView):
+class MyBalanceAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def _summary(self, queryset):
@@ -37,7 +33,7 @@ class MyEarningsAPIView(APIView):
         }
 
     def get(self, request):
-        base_queryset = Earning.objects.filter(organizer=request.user)
+        base_queryset = Balance.objects.filter(organizer=request.user)
 
         paid_queryset = base_queryset.exclude(gross_amount=0)
 
@@ -54,6 +50,8 @@ class MyEarningsAPIView(APIView):
         records = (
             paid_queryset.select_related(
                 "order",
+                "order__payment",
+                "order__refund",
                 "order__reservation",
                 "order__reservation__ticket_type",
                 "order__reservation__ticket_type__event",
@@ -71,7 +69,7 @@ class MyEarningsAPIView(APIView):
         return Response(
             {
                 "summary": summary,
-                "records": EarningSerializer(records, many=True).data,
+                "records": BalanceRecordSerializer(records, many=True).data,
             },
             status=status.HTTP_200_OK,
         )

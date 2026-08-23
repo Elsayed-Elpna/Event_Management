@@ -6,7 +6,7 @@ from audit.models import AuditLog
 from orders.models import Order
 from payments.models import Payment
 from reservations.models import Reservation
-from earnings.models import Earning
+from balance.models import Balance
 
 
 @transaction.atomic
@@ -150,9 +150,9 @@ def process_successful_order_payment(*, transaction_data):
         },
     )
 
-    earning = Earning.objects.filter(order=order).first()
+    balance = Balance.objects.filter(order=order).first()
 
-    if earning is None:
+    if balance is None:
         gross_amount = order.total_price
 
         platform_fee = order.platform_fee
@@ -160,7 +160,7 @@ def process_successful_order_payment(*, transaction_data):
 
         net_amount = gross_amount - platform_fee - payment_fee
 
-        Earning.objects.create(
+        Balance.objects.create(
             organizer=reservation.ticket_type.event.organizer,
             order=order,
             gross_amount=gross_amount,

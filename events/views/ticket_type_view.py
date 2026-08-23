@@ -10,11 +10,12 @@ from events.serializers.ticket_type_serializer import (
     TicketTypeSerializer,
     TicketTypeUpdateSerializer,
 )
+from events.permissions import IsEventMaker
 from events.services.ticket_type_service import create_ticket_type, update_ticket_type
 
 
 class TicketTypeCreateAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsEventMaker]
 
     def post(self, request, event_id):
         try:
@@ -52,7 +53,7 @@ class TicketTypeCreateAPIView(APIView):
 
 
 class TicketTypeUpdateAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsEventMaker]
 
     def patch(self, request, ticket_type_id):
         try:

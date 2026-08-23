@@ -8,17 +8,27 @@ from events.models.event import Event, EventStatus
 
 
 from events.serializers.eventserializer import EventSerializer
+from events.permissions import IsEventMaker
 from events.services.eventservices import create_event, publish_event
 
 
 class EventAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [IsAuthenticated(), IsEventMaker()]
+        return [IsAuthenticated()]
+
     def get(self, request):
         if request.user.is_event_maker:
-            events = Event.objects.filter(organizer=request.user)
+            events = Event.objects.filter(organizer=request.user).prefetch_related(
+                "ticket_types"
+            )
         else:
-            events = Event.objects.filter(status=EventStatus.PUBLISHED)
+            events = Event.objects.filter(status=EventStatus.PUBLISHED).prefetch_related(
+                "ticket_types"
+            )
 
         serializer = EventSerializer(
             events,
@@ -74,7 +84,7 @@ class EventDetailsAPIView(APIView):
 
 
 class EventUpdateAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsEventMaker]
 
     def patch(self, request, event_id):
         try:
@@ -108,7 +118,7 @@ class EventUpdateAPIView(APIView):
 
 
 class PublishEventAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsEventMaker]
 
     def post(self, request, event_id):
         try:

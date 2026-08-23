@@ -56,7 +56,9 @@ class MySubscriptionAPIView(APIView):
 
     def get(self, request):
         try:
-            subscription = request.user.subscription
+            subscription = Subscription.objects.select_related("user").get(
+                user=request.user
+            )
         except Subscription.DoesNotExist:
             return Response(
                 {"detail": "You do not have a subscription."},

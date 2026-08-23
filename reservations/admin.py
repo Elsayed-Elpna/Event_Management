@@ -7,5 +7,6 @@ from .models import Reservation
 @admin.register(Reservation)
 class ReservationAdmin(admin.ModelAdmin):
     list_display = ("id", "user", "ticket_type", "quantity", "expires_at", "status")
+    list_select_related = ("user", "ticket_type__event")
     search_fields = ("user__email", "user__first_name", "user__last_name")
     list_filter = ("status",)

@@ -7,5 +7,6 @@ from .models import Order
 @admin.register(Order)
 class OrderAdmin(admin.ModelAdmin):
     list_display = ("id", "user", "reservation", "quantity", "total_price", "status")
+    list_select_related = ("user", "reservation__user")
     search_fields = ("user__email", "user__first_name", "user__last_name")
     list_filter = ("status",)

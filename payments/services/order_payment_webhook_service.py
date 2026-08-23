@@ -100,7 +100,14 @@ def process_successful_order_payment(*, transaction_data):
     # 7. Lock reservation
     # ---------------------------------
 
-    reservation = Reservation.objects.select_for_update().get(id=order.reservation_id)
+    reservation = (
+        Reservation.objects.select_for_update()
+        .select_related(
+            "ticket_type",
+            "ticket_type__event",
+        )
+        .get(id=order.reservation_id)
+    )
 
     # ---------------------------------
     # 8. Validate reservation

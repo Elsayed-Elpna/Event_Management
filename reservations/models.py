@@ -29,4 +29,4 @@ class Reservation(BaseModel):
     reserved_unit_price = models.PositiveIntegerField()
 
     def __str__(self):
-        return f"{self.user.email} - {self.status}"
+        return f"user#{self.user_id} - {self.status}"

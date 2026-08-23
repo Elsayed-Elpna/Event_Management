@@ -7,6 +7,7 @@ from .models import Payment, Refund
 @admin.register(Payment)
 class PaymentAdmin(admin.ModelAdmin):
     list_display = ("id", "order", "provider", "amount", "status")
+    list_select_related = ("order__reservation", "order__user")
     search_fields = (
         "order__user__email",
         "order__user__first_name",
@@ -18,6 +19,7 @@ class PaymentAdmin(admin.ModelAdmin):
 @admin.register(Refund)
 class RefundAdmin(admin.ModelAdmin):
     list_display = ("id", "order", "reason", "status")
+    list_select_related = ("order__reservation", "order__user")
     search_fields = (
         "order__user__email",
         "order__user__first_name",

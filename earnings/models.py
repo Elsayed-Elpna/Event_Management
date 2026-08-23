@@ -27,4 +27,4 @@ class Earning(BaseModel):
     net_amount = models.PositiveIntegerField()
 
     def __str__(self):
-        return f"Order #{self.order.id}"
+        return f"Order #{self.order_id}"

@@ -35,4 +35,4 @@ class TicketType(BaseModel):
             raise ValidationError("Available inventory cannot be greater than capacity")
 
     def __str__(self):
-        return f"{self.event.title} - {self.ticket_type}"
+        return f"event#{self.event_id} - {self.ticket_type}"

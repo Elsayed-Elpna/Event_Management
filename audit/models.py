@@ -59,4 +59,4 @@ class AuditLog(BaseModel):
     reason = models.TextField(blank=True)
 
     def __str__(self):
-        return f"{self.actor} - {self.action} - {self.entity_type} - {self.entity_id}"
+        return f"{self.actor_id} - {self.action} - {self.entity_type} - {self.entity_id}"

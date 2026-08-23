@@ -72,7 +72,7 @@ def create_reservation(*, user, validated_data):
 def cancel_reservation(*, user, reservation):
     reservation = (
         Reservation.objects.select_for_update()
-        .select_related("ticket_type")
+        .select_related("ticket_type", "ticket_type__event")
         .get(id=reservation.id)
     )
 

@@ -14,6 +14,7 @@ class EarningsAdmin(admin.ModelAdmin):
         "payment_fee",
         "net_amount",
     )
+    list_select_related = ("order__reservation", "order__user")
     search_fields = (
         "order__user__email",
         "order__user__first_name",

@@ -40,4 +40,4 @@ class Subscription(BaseModel):
     expires_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
-        return f"{self.user.email} - {self.status}"
+        return f"user#{self.user_id} - {self.status}"

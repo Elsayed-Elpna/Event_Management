@@ -53,4 +53,4 @@ class Order(BaseModel):
     idempotency_key = models.UUIDField(unique=True)
 
     def __str__(self):
-        return f" Order #{self.id} - {self.reservation} - {self.user}"
+        return f"Order #{self.id} - reservation#{self.reservation_id} - user#{self.user_id}"

@@ -33,6 +33,7 @@ class TicketTypeAdmin(admin.ModelAdmin):
         "capacity",
         "available_inventory",
     )
+    list_select_related = ("event",)
 
     search_fields = (
         "event__title",

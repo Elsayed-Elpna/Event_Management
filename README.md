@@ -36,6 +36,8 @@ DB_HOST=db
 DB_PORT=5432
 REDIS_URL=redis://redis:6379/0
 
+REFUND_CUTOFF_HOURS=48
+
 PAYMOB_BASE_URL=https://accept.paymob.com
 PAYMOB_SECRET_KEY=your-paymob-secret-key
 PAYMOB_PUBLIC_KEY=your-paymob-public-key
@@ -146,7 +148,7 @@ All routes are prefixed with `/api`.
 | POST   | `/api/orders/create/`                 | Yes  | Create order (requires `idempotency_key`)        |
 | GET    | `/api/orders/`                        | Yes  | List my orders                                   |
 | POST   | `/api/orders/<id>/payment/`           | Yes  | Initiate payment -> checkout URL                 |
-| POST   | `/api/orders/<id>/refund/`            | Yes  | Full-order refund                                |
+| POST   | `/api/orders/<id>/refund/`            | Yes  | Full-order refund -> `201` with `PENDING` status |
 | POST   | `/api/subscriptions/`                 | Yes  | Create subscription                              |
 | GET    | `/api/subscriptions/me/`              | Yes  | My subscription                                  |
 | GET    | `/api/balance/`                       | Yes  | My balance (sales + totals)                      |
@@ -189,7 +191,13 @@ curl -X POST http://localhost:8000/api/orders/1/refund/ \
 1. User creates an order, supplying an `idempotency_key`.
 2. User pays via the Paymob checkout URL.
 3. Paymob calls the webhook -> payment/order become `PAID`, reservation becomes
-   `CONFIRMED`, an organizer earning is recorded, audit entries are written.
+   `CONFIRMED`, an organizer balance entry is recorded, audit entries are written.
+
+**Payment initiation outage**
+
+- If Paymob is unreachable during checkout, the API returns a retryable error
+  and nothing partial is persisted; the order stays `PENDING` and payment can
+  be re-initiated (first writer wins if two attempts race).
 
 **Payment failure**
 
@@ -201,11 +209,19 @@ curl -X POST http://localhost:8000/api/orders/1/refund/ \
 - The background job marks expired holds as `EXPIRED` and restores inventory.
 - Expired reservations can never be confirmed or paid.
 
-**Refund (full order)**
+**Refund (full order, asynchronous)**
 
-- An organizer, the buyer, or staff issues a full refund.
-- Order and payment become `REFUNDED`, inventory is restored atomically, a
-  `Refund` record is created, earnings are zeroed, and audit entries are written.
+1. Organizer, buyer, or staff issues a full refund. The API validates the order
+   and creates a `Refund` with status `PENDING`, then responds immediately.
+2. A Celery task performs the Paymob call outside any database transaction:
+   - On success: payment/order become `REFUNDED`, inventory is restored, the
+     reservation is `CANCELLED` (the ticket is revoked), the organizer balance
+     entry is zeroed, and audit entries are written.
+   - On transient provider errors: the task retries with exponential backoff;
+     after exhausting retries (or a permanent provider rejection) the refund is
+     marked `FAILED` with an audit entry, and the order stays `PAID`.
+3. Refunds are **blocked for everyone** within `REFUND_CUTOFF_HOURS` of the
+   event start (default 48 h) and after the event has started.
 
 ## Business Rules
 
@@ -214,8 +230,14 @@ curl -X POST http://localhost:8000/api/orders/1/refund/ \
 - **Price** is stored in **cents** (`price_cents`).
 - **Idempotent orders** - one order per `idempotency_key`, enforced by a unique DB constraint.
 - **Zero tolerance for oversell** - reservations serialize on a Postgres row lock.
-- **Refunds** are full-order only and restore inventory atomically in the same transaction.
-- **No raw payment data is stored** - only provider references/tokens (simulated capture).
+- **Refunds** are full-order only, processed asynchronously by a background
+  task (no DB locks are held across Paymob HTTP calls), restore inventory,
+  cancel the reservation (revoking the ticket), and zero the balance entry.
+- **Refund cutoff** - refunds close for everyone within `REFUND_CUTOFF_HOURS`
+  hours before the event starts (env-tunable, default 48) and stay closed
+  afterwards.
+- **No raw payment data is stored** - only provider references/transaction ids
+  (exposed via `/api/balance/` for reconciliation).
 
 ## Background Jobs (Celery Beat)
 
@@ -289,8 +311,11 @@ Notes:
 
 - Tests require PostgreSQL, so start `db` first.
 - Use `--noinput` in non-interactive shells so the test database is recreated automatically.
-- `events/tests.py` has pre-existing failures caused by URL mismatches (tests reference
-  `/ticket-types/` while the routes are `/ticket/` and `/update-ticket/`).
+- `--keepdb` speeds up repeated runs by reusing the test database (drop
+  `test_event_db` manually if migrations changed shape).
+- The suite covers the full refund lifecycle including the 48-hour cutoff,
+  provider failure paths, subscription checkout outages, and a concurrency
+  zero-oversell race.
 
 ## Project Structure
 
@@ -299,7 +324,7 @@ accounts/       Users, registration, profile, JWT
 events/         Events, ticket types (capacity/price in cents)
 reservations/   Reservation holds, expiry, cancellation
 orders/         Idempotent order creation, payment initiation, refunds
-payments/       Payment/refund models, Paymob integration + webhook
+payments/       Payment/refund models, Paymob integration + webhook, async refund task
 subscriptions/  Organizer subscriptions
 balance/        Organizer balance from paid orders (sales ledger + totals)
 audit/          AuditLog for every inventory/order lifecycle event

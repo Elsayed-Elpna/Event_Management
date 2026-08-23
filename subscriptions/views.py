@@ -23,9 +23,16 @@ class SubscriptionCreateAPIView(APIView):
         )
 
         serializer.is_valid(raise_exception=True)
-        subscription, paymob_response = create_subscription(
-            user=request.user,
-        )
+
+        try:
+            subscription, paymob_response = create_subscription(
+                user=request.user,
+            )
+        except ValueError as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         checkout_url = (
             f"{settings.PAYMOB_BASE_URL}/unifiedcheckout/"

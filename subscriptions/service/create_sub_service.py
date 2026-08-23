@@ -1,3 +1,5 @@
+import requests
+
 from django.conf import settings
 from django.db import transaction
 
@@ -6,10 +8,50 @@ from payments.services.paymob_service import PaymobService
 from subscriptions.models import Subscription, SubscriptionStatus
 
 
-@transaction.atomic
 def create_subscription(*, user):
     price_cents = settings.SUBSCRIPTION_PRICE_CENTS
 
+    # ---------------------------------
+    # 1. Create pending rows (short tx, no locks on shared rows)
+    # ---------------------------------
+    subscription, payment = _create_pending_subscription(
+        user=user,
+        price_cents=price_cents,
+    )
+
+    # ---------------------------------
+    # 2. Call Paymob with NO transaction or locks held
+    # ---------------------------------
+    try:
+        paymob_response = _request_payment_intention(
+            user=user,
+            subscription=subscription,
+            payment=payment,
+            price_cents=price_cents,
+        )
+    except requests.RequestException as exc:
+        raise ValueError(
+            "Could not contact the payment provider. Please try again."
+        ) from exc
+
+    # ---------------------------------
+    # 3. Persist provider reference (short tx)
+    # ---------------------------------
+    effective_reference = _save_provider_reference(
+        payment=payment,
+        provider_reference=paymob_response["id"],
+    )
+
+    if effective_reference != paymob_response["id"]:
+        paymob_response["id"] = effective_reference
+
+    payment.provider_reference = effective_reference
+
+    return subscription, paymob_response
+
+
+@transaction.atomic
+def _create_pending_subscription(*, user, price_cents):
     subscription = Subscription.objects.create(
         user=user,
         amount_cents=price_cents,
@@ -25,6 +67,10 @@ def create_subscription(*, user):
     subscription.payment = payment
     subscription.save(update_fields=["payment", "updated_at"])
 
+    return subscription, payment
+
+
+def _request_payment_intention(*, user, subscription, payment, price_cents):
     paymob_service = PaymobService()
 
     billing_data = {
@@ -50,15 +96,22 @@ def create_subscription(*, user):
         }
     ]
 
-    paymob_response = paymob_service.create_payment_intention(
+    return paymob_service.create_payment_intention(
         amount_cents=price_cents,
-        # reference_id=f"subscription-{subscription.id}",
         reference_id=f"subscription-{subscription.id}-payment-{payment.id}",
         items=items,
         billing_data=billing_data,
     )
 
-    payment.provider_reference = paymob_response["id"]
+
+@transaction.atomic
+def _save_provider_reference(*, payment, provider_reference):
+    payment = Payment.objects.select_for_update().get(id=payment.id)
+
+    if payment.provider_reference:
+        return payment.provider_reference
+
+    payment.provider_reference = provider_reference
 
     payment.save(
         update_fields=[
@@ -67,4 +120,4 @@ def create_subscription(*, user):
         ]
     )
 
-    return subscription, paymob_response
+    return payment.provider_reference

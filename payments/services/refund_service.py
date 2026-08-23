@@ -1,3 +1,5 @@
+import requests
+
 from django.db import transaction
 from django.utils import timezone
 
@@ -8,8 +10,20 @@ from payments.models import Payment, Refund
 from payments.services.paymob_service import PaymobService
 
 
+class TransientProviderError(Exception):
+    """Provider unreachable (network/timeout/5xx) — safe to retry."""
+
+
+class PermanentProviderError(Exception):
+    """Provider rejected the refund (4xx) — retrying will not help."""
+
+
 @transaction.atomic
 def process_order_refund(*, user, order_id, reason):
+    # ---------------------------------
+    # 1. Lock order and validate (short tx)
+    # ---------------------------------
+
     order = (
         Order.objects.select_for_update(of=("self",))
         .select_related(
@@ -32,6 +46,141 @@ def process_order_refund(*, user, order_id, reason):
 
     if getattr(order, "refund", None) is not None:
         raise ValueError("Order has already been refunded.")
+
+    if (
+        order.payment is None
+        or order.payment.status != Payment.PaymentStatus.SUCCESS
+    ):
+        raise ValueError("Order does not have a successful payment to refund.")
+
+    # ---------------------------------
+    # 2. Record refund intent as PENDING and release locks.
+    #    The Paymob call happens in a background worker,
+    #    never inside this transaction or the HTTP request.
+    # ---------------------------------
+
+    refund = Refund.objects.create(
+        order=order,
+        reason=reason,
+        status=Refund.RefundStatus.PENDING,
+    )
+
+    def _enqueue():
+        from payments.tasks import process_refund_task
+
+        process_refund_task.delay(refund.id)
+
+    transaction.on_commit(_enqueue)
+
+    return refund
+
+
+def finalize_refund(*, refund_id):
+    # ---------------------------------
+    # 1. Lock and snapshot context (short tx)
+    # ---------------------------------
+
+    context = _prepare_refund_finalization(refund_id=refund_id)
+
+    if context is None:
+        return None
+
+    # ---------------------------------
+    # 2. Call Paymob with NO transaction or locks held
+    # ---------------------------------
+
+    paymob = PaymobService()
+
+    try:
+        paymob.create_refund(**context["paymob_kwargs"])
+    except requests.HTTPError as exc:
+        mark_refund_failed(
+            refund_id=refund_id,
+            detail=f"Provider rejected refund ({exc.response.status_code}).",
+        )
+        raise PermanentProviderError(str(exc)) from exc
+    except requests.RequestException as exc:
+        raise TransientProviderError(str(exc)) from exc
+
+    # ---------------------------------
+    # 3. Finalize locally in a fresh short tx
+    # ---------------------------------
+
+    return _complete_refund(context=context)
+
+
+def _prepare_refund_finalization(*, refund_id):
+    # NOTE: Order.payment is nullable, so it must NOT be joined under
+    # select_for_update (Postgres forbids locking the nullable side of
+    # an outer join). It is read separately below; the completing tx
+    # re-validates everything under lock before mutating anything.
+    refund = (
+        Refund.objects.select_for_update()
+        .select_related(
+            "order",
+            "order__reservation",
+        )
+        .get(id=refund_id)
+    )
+
+    if refund.status != Refund.RefundStatus.PENDING:
+        return None
+
+    order = refund.order
+
+    if order.status != Order.OrderStatus.PAID:
+        mark_refund_failed(
+            refund_id=refund_id,
+            detail="Order is no longer paid; refund aborted.",
+        )
+        return None
+
+    payment = order.payment
+
+    if payment is None or payment.provider_transaction_id is None:
+        mark_refund_failed(
+            refund_id=refund_id,
+            detail="Payment has no provider transaction to refund.",
+        )
+        return None
+
+    return {
+        "refund_id": refund.id,
+        "order_id": order.id,
+        "paymob_kwargs": {
+            "transaction_id": payment.provider_transaction_id,
+            "amount_cents": payment.amount,
+            "description": refund.reason,
+        },
+    }
+
+
+def _complete_refund(*, context):
+    refund = (
+        Refund.objects.select_for_update()
+        .select_related("order")
+        .get(id=context["refund_id"])
+    )
+
+    if refund.status != Refund.RefundStatus.PENDING:
+        return refund
+
+    order = (
+        Order.objects.select_for_update(of=("self",))
+        .select_related(
+            "payment",
+            "reservation",
+            "reservation__ticket_type",
+        )
+        .get(id=context["order_id"])
+    )
+
+    if order.status != Order.OrderStatus.PAID:
+        mark_refund_failed(
+            refund_id=refund.id,
+            detail="Order status changed during refund; refund aborted.",
+        )
+        return refund
 
     ticket_type = TicketType.objects.select_for_update().get(
         id=order.reservation.ticket_type_id
@@ -66,11 +215,15 @@ def process_order_refund(*, user, order_id, reason):
         ]
     )
 
-    refund = Refund.objects.create(
-        order=order,
-        reason=reason,
-        status=Refund.RefundStatus.SUCCESS,
-        refunded_at=timezone.now(),
+    refund.status = Refund.RefundStatus.SUCCESS
+    refund.refunded_at = timezone.now()
+
+    refund.save(
+        update_fields=[
+            "status",
+            "refunded_at",
+            "updated_at",
+        ]
     )
 
     earning = getattr(order, "earning", None)
@@ -92,11 +245,11 @@ def process_order_refund(*, user, order_id, reason):
         )
 
     AuditLog.objects.create(
-        actor=user,
+        actor=None,
         action=AuditLog.AuditAction.REFUND_CREATED,
         entity_type="Order",
         entity_id=order.id,
-        reason=f"Full refund issued. Reason: {reason}",
+        reason=f"Full refund confirmed by provider. Reason: {refund.reason}",
         metadata={
             "refund_id": refund.id,
             "order_id": order.id,
@@ -107,7 +260,7 @@ def process_order_refund(*, user, order_id, reason):
     )
 
     AuditLog.objects.create(
-        actor=user,
+        actor=None,
         action=AuditLog.AuditAction.INVENTORY_UPDATED,
         entity_type="TicketType",
         entity_id=ticket_type.id,
@@ -122,10 +275,35 @@ def process_order_refund(*, user, order_id, reason):
         },
     )
 
-    PaymobService().create_refund(
-        transaction_id=order.payment.provider_transaction_id,
-        amount_cents=order.payment.amount,
-        description=reason,
+    return refund
+
+
+@transaction.atomic
+def mark_refund_failed(*, refund_id, detail):
+    refund = Refund.objects.select_for_update().get(id=refund_id)
+
+    if refund.status != Refund.RefundStatus.PENDING:
+        return refund
+
+    refund.status = Refund.RefundStatus.FAILED
+
+    refund.save(
+        update_fields=[
+            "status",
+            "updated_at",
+        ]
+    )
+
+    AuditLog.objects.create(
+        actor=None,
+        action=AuditLog.AuditAction.REFUND_CREATED,
+        entity_type="Order",
+        entity_id=refund.order_id,
+        reason=f"Refund failed before completion. Detail: {detail}",
+        metadata={
+            "refund_id": refund.id,
+            "order_id": refund.order_id,
+        },
     )
 
     return refund

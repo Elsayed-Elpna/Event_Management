@@ -1,5 +1,6 @@
 from django.db import transaction, IntegrityError
 from django.utils import timezone
+import requests
 
 from reservations.models import Reservation
 from payments.models import Payment
@@ -162,16 +163,17 @@ def create_order_payment(*, user, order):
 
 
 @transaction.atomic
-def initiate_order_payment(*, user, order):
+def _prepare_order_for_payment(*, user, order_id):
     order = (
         Order.objects.select_for_update(of=("self",))
         .select_related(
             "payment",
+            "user",
             "reservation",
             "reservation__ticket_type",
             "reservation__ticket_type__event",
         )
-        .get(id=order.id)
+        .get(id=order_id)
     )
 
     if order.user_id != user.id:
@@ -192,6 +194,22 @@ def initiate_order_payment(*, user, order):
     if payment.status != Payment.PaymentStatus.PENDING:
         raise ValueError("Only pending payments can be initiated.")
 
+    return order
+
+
+def initiate_order_payment(*, user, order):
+    # ---------------------------------
+    # 1. Lock and validate (short tx, lock released on exit)
+    # ---------------------------------
+
+    order = _prepare_order_for_payment(user=user, order_id=order.id)
+
+    payment = order.payment
+
+    # ---------------------------------
+    # 2. Idempotent return of existing intention
+    # ---------------------------------
+
     if payment.provider_reference and payment.client_secret:
         return {
             "order": order,
@@ -199,25 +217,51 @@ def initiate_order_payment(*, user, order):
             "client_secret": payment.client_secret,
         }
 
+    # ---------------------------------
+    # 3. Call Paymob with NO transaction or locks held
+    # ---------------------------------
+
     paymob = PaymobService()
 
-    intention = paymob.create_order_intention(
+    try:
+        intention = paymob.create_order_intention(order=order)
+    except requests.RequestException:
+        raise ValueError(
+            "Could not contact the payment provider. Please try again."
+        )
+
+    # ---------------------------------
+    # 4. Persist intention in a fresh short tx (first writer wins)
+    # ---------------------------------
+
+    return _save_payment_intention(
         order=order,
+        provider_reference=intention["id"],
+        client_secret=intention["client_secret"],
     )
 
-    payment.provider_reference = intention["id"]
-    payment.client_secret = intention["client_secret"]
 
-    payment.save(
-        update_fields=[
-            "provider_reference",
-            "client_secret",
-            "updated_at",
-        ]
-    )
+@transaction.atomic
+def _save_payment_intention(*, order, provider_reference, client_secret):
+    payment = Payment.objects.select_for_update().get(id=order.payment_id)
+
+    if payment.status != Payment.PaymentStatus.PENDING:
+        raise ValueError("Payment is no longer pending.")
+
+    if not (payment.provider_reference and payment.client_secret):
+        payment.provider_reference = provider_reference
+        payment.client_secret = client_secret
+
+        payment.save(
+            update_fields=[
+                "provider_reference",
+                "client_secret",
+                "updated_at",
+            ]
+        )
 
     return {
         "order": order,
         "payment": payment,
-        "client_secret": intention["client_secret"],
+        "client_secret": payment.client_secret,
     }

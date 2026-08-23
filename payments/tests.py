@@ -5,6 +5,9 @@ from datetime import timedelta
 from unittest.mock import patch
 from uuid import uuid4
 
+import requests
+
+from django.test import override_settings
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -15,15 +18,27 @@ from earnings.models import Earning
 from events.models import Event, TicketType
 from events.models.event import EventStatus
 from orders.models import Order
-from orders.service import create_order
+from orders.service import (
+    create_order,
+    _save_payment_intention,
+)
 from payments.models import Payment, Refund
 from payments.services.order_payment_webhook_service import (
     process_successful_order_payment,
+)
+from payments.services.refund_service import (
+    TransientProviderError,
+    finalize_refund,
+    process_order_refund,
 )
 from reservations.services import create_reservation
 from subscriptions.models import Subscription, SubscriptionStatus
 
 
+@override_settings(
+    CELERY_TASK_ALWAYS_EAGER=True,
+    CELERY_TASK_EAGER_PROPAGATES=True,
+)
 class RefundAPITestCase(APITestCase):
 
     def setUp(self):
@@ -113,11 +128,12 @@ class RefundAPITestCase(APITestCase):
                 "refund_id": "sim-refund",
             },
         ):
-            return self.client.post(
-                f"/api/orders/{order_id}/refund/",
-                {"reason": reason},
-                format="json",
-            )
+            with self.captureOnCommitCallbacks(execute=True):
+                return self.client.post(
+                    f"/api/orders/{order_id}/refund/",
+                    {"reason": reason},
+                    format="json",
+                )
 
     def test_organizer_can_refund_paid_order(self):
         order = self.make_paid_order()
@@ -275,3 +291,302 @@ class RefundAPITestCase(APITestCase):
             response.status_code,
             status.HTTP_404_NOT_FOUND,
         )
+
+    def test_refund_response_reports_pending(self):
+        order = self.make_paid_order()
+
+        self.client.force_authenticate(user=self.event_maker)
+
+        with patch(
+            "payments.services.paymob_service.PaymobService.create_refund",
+            return_value={},
+        ):
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(
+                    f"/api/orders/{order.id}/refund/",
+                    {"reason": "Async check"},
+                    format="json",
+                )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED,
+        )
+
+        self.assertEqual(
+            response.data["status"],
+            Refund.RefundStatus.PENDING,
+        )
+
+
+@override_settings(
+    CELERY_TASK_ALWAYS_EAGER=True,
+    CELERY_TASK_EAGER_PROPAGATES=True,
+)
+class RefundProviderFailureTestCase(RefundAPITestCase):
+    def test_provider_rejection_marks_refund_failed(self):
+        order = self.make_paid_order(quantity=2)
+
+        rejected_response = requests.Response()
+        rejected_response.status_code = 400
+
+        with patch(
+            "payments.services.paymob_service.PaymobService.create_refund",
+            side_effect=requests.HTTPError(
+                "400 Client Error",
+                response=rejected_response,
+            ),
+        ):
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(
+                    f"/api/orders/{order.id}/refund/",
+                    {"reason": "Rejected"},
+                    format="json",
+                )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED,
+        )
+
+        refund = Refund.objects.get(order=order)
+
+        self.assertEqual(refund.status, Refund.RefundStatus.FAILED)
+        self.assertIsNone(refund.refunded_at)
+
+        order.refresh_from_db()
+        order.payment.refresh_from_db()
+        self.ticket_type.refresh_from_db()
+
+        self.assertEqual(order.status, Order.OrderStatus.PAID)
+        self.assertEqual(
+            order.payment.status,
+            Payment.PaymentStatus.SUCCESS,
+        )
+        self.assertEqual(self.ticket_type.available_inventory, 98)
+
+        earning = Earning.objects.get(order=order)
+        self.assertEqual(earning.gross_amount, order.total_price)
+
+        self.assertTrue(
+            AuditLog.objects.filter(
+                action=AuditLog.AuditAction.REFUND_CREATED,
+                entity_id=order.id,
+                reason__startswith="Refund failed before completion.",
+            ).exists()
+        )
+
+    def test_transient_provider_error_keeps_refund_pending(self):
+        order = self.make_paid_order()
+
+        refund = process_order_refund(
+            user=self.event_maker,
+            order_id=order.id,
+            reason="Transient test",
+        )
+
+        with patch(
+            "payments.services.paymob_service.PaymobService.create_refund",
+            side_effect=requests.ConnectionError("connection dropped"),
+        ):
+            with self.assertRaises(TransientProviderError):
+                finalize_refund(refund_id=refund.id)
+
+        refund.refresh_from_db()
+
+        self.assertEqual(refund.status, Refund.RefundStatus.PENDING)
+
+        order.refresh_from_db()
+
+        self.assertEqual(order.status, Order.OrderStatus.PAID)
+
+
+@override_settings(
+    CELERY_TASK_ALWAYS_EAGER=True,
+    CELERY_TASK_EAGER_PROPAGATES=True,
+)
+class OrderPaymentAPITestCase(APITestCase):
+
+    def setUp(self):
+        self.buyer = User.objects.create_user(
+            email="buyer@test.com",
+            password="TestPassword123",
+        )
+
+        self.event_maker = User.objects.create_user(
+            email="maker@test.com",
+            password="TestPassword123",
+            is_event_maker=True,
+        )
+
+        Subscription.objects.create(
+            user=self.event_maker,
+            amount_cents=100000,
+            status=SubscriptionStatus.ACTIVE,
+        )
+
+        self.event = Event.objects.create(
+            organizer=self.event_maker,
+            title="Django Conference",
+            description="Backend event",
+            location="Cairo",
+            status=EventStatus.PUBLISHED,
+            starts_at=timezone.now() + timedelta(days=1),
+            ends_at=timezone.now() + timedelta(days=1, hours=4),
+            hold_duration=10,
+        )
+
+        self.ticket_type = TicketType.objects.create(
+            event=self.event,
+            ticket_type=TicketType.TicketTypeChoice.REGULAR,
+            price_cents=100000,
+            capacity=100,
+            available_inventory=100,
+        )
+
+        self.client.force_authenticate(user=self.buyer)
+
+    def make_pending_order(self, quantity=1):
+        reservation = create_reservation(
+            user=self.buyer,
+            validated_data={
+                "ticket_type": self.ticket_type,
+                "quantity": quantity,
+            },
+        )
+
+        return create_order(
+            user=self.buyer,
+            reservation_id=reservation.id,
+            idempotency_key=uuid4(),
+        )
+
+    def pay(self, order_id, intention_response=None, side_effect=None):
+        patcher = patch(
+            "payments.services.paymob_service.PaymobService.create_order_intention",
+            return_value=intention_response or {},
+            side_effect=side_effect,
+        )
+
+        mocked = patcher.start()
+        response = self.client.post(f"/api/orders/{order_id}/payment/")
+        patcher.stop()
+
+        return response, mocked
+
+    def test_payment_initiation_success(self):
+        order = self.make_pending_order()
+
+        response, mocked = self.pay(
+            order.id,
+            intention_response={"id": "int-1", "client_secret": "secret-abc"},
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+        )
+
+        self.assertEqual(
+            response.data["client_secret"],
+            "secret-abc",
+        )
+
+        self.assertIn(
+            "secret-abc",
+            response.data["checkout_url"],
+        )
+
+        payment = Payment.objects.get(order=order)
+
+        self.assertEqual(
+            str(payment.provider_reference),
+            "int-1",
+        )
+
+        self.assertEqual(
+            payment.client_secret,
+            "secret-abc",
+        )
+
+        mocked.assert_called_once()
+
+    def test_payment_initiation_is_idempotent(self):
+        order = self.make_pending_order()
+
+        first_response, _ = self.pay(
+            order.id,
+            intention_response={"id": "int-1", "client_secret": "secret-abc"},
+        )
+
+        second_response, mocked = self.pay(
+            order.id,
+            intention_response={"id": "int-2", "client_secret": "secret-xyz"},
+        )
+
+        self.assertEqual(first_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(second_response.status_code, status.HTTP_200_OK)
+
+        self.assertEqual(
+            second_response.data["client_secret"],
+            "secret-abc",
+        )
+
+        mocked.assert_not_called()
+
+    def test_provider_outage_keeps_payment_retryable(self):
+        order = self.make_pending_order()
+
+        response, _ = self.pay(
+            order.id,
+            side_effect=requests.ConnectionError("paymob unreachable"),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+        payment = Payment.objects.get(order=order)
+
+        self.assertEqual(payment.status, Payment.PaymentStatus.PENDING)
+        self.assertIsNone(payment.provider_reference)
+        self.assertIsNone(payment.client_secret)
+
+        retry_response, _ = self.pay(
+            order.id,
+            intention_response={"id": "int-9", "client_secret": "secret-retry"},
+        )
+
+        self.assertEqual(retry_response.status_code, status.HTTP_200_OK)
+
+        payment.refresh_from_db()
+
+        self.assertEqual(payment.client_secret, "secret-retry")
+
+    def test_first_writer_wins_on_intention_persistence(self):
+        order = self.make_pending_order()
+
+        winner = Payment.objects.create(
+            payment_type=Payment.PaymentType.ORDER,
+            amount=order.total_price,
+            status=Payment.PaymentStatus.PENDING,
+            provider_reference="winner-ref",
+            client_secret="winner-secret",
+        )
+
+        order.payment = winner
+        order.save(update_fields=["payment"])
+
+        result = _save_payment_intention(
+            order=order,
+            provider_reference="loser-ref",
+            client_secret="loser-secret",
+        )
+
+        self.assertEqual(result["client_secret"], "winner-secret")
+
+        winner.refresh_from_db()
+
+        self.assertEqual(winner.provider_reference, "winner-ref")
+        self.assertEqual(winner.client_secret, "winner-secret")

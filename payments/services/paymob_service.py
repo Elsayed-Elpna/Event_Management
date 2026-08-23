@@ -42,9 +42,6 @@ class PaymobService:
         # response.raise_for_status()
 
         # return response.json()
-        if not response.ok:
-            print("PAYMOB STATUS:", response.status_code)
-            print("PAYMOB RESPONSE:", response.text)
 
         response.raise_for_status()
 
@@ -131,7 +128,6 @@ class PaymobService:
             billing_data=billing_data,
         )
 
-
     def create_refund(self, *, transaction_id, amount_cents, description):
         url = f"{settings.PAYMOB_BASE_URL}/api/acceptance/void_refund/refund"
 
@@ -150,11 +146,6 @@ class PaymobService:
             timeout=10,
         )
 
-        if not response.ok:
-            print("PAYMOB REFUND STATUS:", response.status_code)
-            print("PAYMOB REFUND RESPONSE:", response.text)
-            raise ValueError(
-                f"Paymob refund failed: {response.status_code} {response.text}"
-            )
+        response.raise_for_status()
 
         return response.json()

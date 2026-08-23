@@ -316,7 +316,7 @@ class TicketTypeAPITestCase(APITestCase):
 
     def test_create_regular_ticket(self):
         response = self.client.post(
-            f"/api/events/{self.event.id}/ticket-types/",
+            f"/api/events/{self.event.id}/ticket/",
             self.ticket_data,
             format="json",
         )
@@ -345,7 +345,7 @@ class TicketTypeAPITestCase(APITestCase):
 
     def test_create_vip_ticket(self):
         response = self.client.post(
-            f"/api/events/{self.event.id}/ticket-types/",
+            f"/api/events/{self.event.id}/ticket/",
             {
                 "ticket_type": "VIP",
                 "price_cents": 200000,
@@ -376,7 +376,7 @@ class TicketTypeAPITestCase(APITestCase):
         )
 
         response = self.client.post(
-            f"/api/events/{self.event.id}/ticket-types/",
+            f"/api/events/{self.event.id}/ticket/",
             self.ticket_data,
             format="json",
         )
@@ -388,7 +388,7 @@ class TicketTypeAPITestCase(APITestCase):
 
     def test_invalid_ticket_type(self):
         response = self.client.post(
-            f"/api/events/{self.event.id}/ticket-types/",
+            f"/api/events/{self.event.id}/ticket/",
             {
                 "ticket_type": "PREMIUM",
                 "price_cents": 100000,
@@ -404,7 +404,7 @@ class TicketTypeAPITestCase(APITestCase):
 
     def test_invalid_price(self):
         response = self.client.post(
-            f"/api/events/{self.event.id}/ticket-types/",
+            f"/api/events/{self.event.id}/ticket/",
             {
                 "ticket_type": "REGULAR",
                 "price_cents": 0,
@@ -420,7 +420,7 @@ class TicketTypeAPITestCase(APITestCase):
 
     def test_invalid_capacity(self):
         response = self.client.post(
-            f"/api/events/{self.event.id}/ticket-types/",
+            f"/api/events/{self.event.id}/ticket/",
             {
                 "ticket_type": "REGULAR",
                 "price_cents": 100000,
@@ -444,7 +444,7 @@ class TicketTypeAPITestCase(APITestCase):
         self.client.force_authenticate(user=user)
 
         response = self.client.post(
-            f"/api/events/{self.event.id}/ticket-types/",
+            f"/api/events/{self.event.id}/ticket/",
             self.ticket_data,
             format="json",
         )
@@ -464,7 +464,7 @@ class TicketTypeAPITestCase(APITestCase):
         self.client.force_authenticate(user=other_user)
 
         response = self.client.post(
-            f"/api/events/{self.event.id}/ticket-types/",
+            f"/api/events/{self.event.id}/ticket/",
             self.ticket_data,
             format="json",
         )
@@ -475,11 +475,11 @@ class TicketTypeAPITestCase(APITestCase):
         )
 
     def test_cannot_create_ticket_for_published_event(self):
-        self.event.status = Event.EventStatus.PUBLISHED
+        self.event.status = EventStatus.PUBLISHED
         self.event.save(update_fields=["status"])
 
         response = self.client.post(
-            f"/api/events/{self.event.id}/ticket-types/",
+            f"/api/events/{self.event.id}/ticket/",
             self.ticket_data,
             format="json",
         )
@@ -499,7 +499,7 @@ class TicketTypeAPITestCase(APITestCase):
         )
 
         response = self.client.patch(
-            f"/api/ticket-types/{ticket.id}/",
+            f"/api/events/{ticket.id}/update-ticket/",
             {
                 "capacity": 150,
             },
@@ -532,11 +532,11 @@ class TicketTypeAPITestCase(APITestCase):
             available_inventory=100,
         )
 
-        self.event.status = Event.EventStatus.PUBLISHED
+        self.event.status = EventStatus.PUBLISHED
         self.event.save(update_fields=["status"])
 
         response = self.client.patch(
-            f"/api/ticket-types/{ticket.id}/",
+            f"/api/events/{ticket.id}/update-ticket/",
             {
                 "price_cents": 150000,
             },
@@ -641,7 +641,7 @@ class EventMakerPermissionTestCase(APITestCase):
 
     def test_anonymous_cannot_create_ticket_type(self):
         response = self.client.post(
-            f"/api/events/{self.event.id}/ticket-types/",
+            f"/api/events/{self.event.id}/ticket/",
             self.ticket_data,
             format="json",
         )
@@ -653,7 +653,7 @@ class EventMakerPermissionTestCase(APITestCase):
 
     def test_anonymous_cannot_update_ticket_type(self):
         response = self.client.patch(
-            f"/api/ticket-types/{self.ticket.id}/",
+            f"/api/events/{self.ticket.id}/update-ticket/",
             {"price_cents": 150000},
             format="json",
         )
@@ -718,7 +718,7 @@ class EventMakerPermissionTestCase(APITestCase):
         self.client.force_authenticate(user=self.normal_user)
 
         response = self.client.post(
-            f"/api/events/{self.event.id}/ticket-types/",
+            f"/api/events/{self.event.id}/ticket/",
             self.ticket_data,
             format="json",
         )
@@ -732,7 +732,7 @@ class EventMakerPermissionTestCase(APITestCase):
         self.client.force_authenticate(user=self.normal_user)
 
         response = self.client.patch(
-            f"/api/ticket-types/{self.ticket.id}/",
+            f"/api/events/{self.ticket.id}/update-ticket/",
             {"price_cents": 150000},
             format="json",
         )

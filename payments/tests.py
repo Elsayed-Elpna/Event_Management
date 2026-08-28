@@ -593,6 +593,216 @@ class OrderPaymentAPITestCase(APITestCase):
         self.assertEqual(winner.client_secret, "winner-secret")
 
 
+class OrderWebhookGuardTestCase(APITestCase):
+    """A stale, duplicate, or unprocessable payment webhook must be acknowledged
+    with 2xx and must never mark a payment as successful for a reservation
+    that can no longer be confirmed."""
+
+    def setUp(self):
+        self.buyer = User.objects.create_user(
+            email="guardbuyer@test.com",
+            password="TestPassword123",
+        )
+
+        self.event_maker = User.objects.create_user(
+            email="guardmaker@test.com",
+            password="TestPassword123",
+            is_event_maker=True,
+        )
+
+        Subscription.objects.create(
+            user=self.event_maker,
+            amount_cents=100000,
+            status=SubscriptionStatus.ACTIVE,
+        )
+
+        self.event = Event.objects.create(
+            organizer=self.event_maker,
+            title="Guard Conference",
+            description="Webhook guard event",
+            location="Cairo",
+            status=EventStatus.PUBLISHED,
+            starts_at=timezone.now() + timedelta(days=3),
+            ends_at=timezone.now() + timedelta(days=3, hours=4),
+            hold_duration=10,
+        )
+
+        self.ticket_type = TicketType.objects.create(
+            event=self.event,
+            ticket_type=TicketType.TicketTypeChoice.REGULAR,
+            price_cents=100000,
+            capacity=100,
+            available_inventory=100,
+        )
+
+        self.client.force_authenticate(user=self.buyer)
+
+    def make_pending_order(self, quantity=1):
+        reservation = create_reservation(
+            user=self.buyer,
+            validated_data={
+                "ticket_type": self.ticket_type,
+                "quantity": quantity,
+            },
+        )
+
+        order = create_order(
+            user=self.buyer,
+            reservation_id=reservation.id,
+            idempotency_key=uuid4(),
+        )
+
+        payment = Payment.objects.create(
+            payment_type=Payment.PaymentType.ORDER,
+            amount=order.total_price,
+            status=Payment.PaymentStatus.PENDING,
+        )
+
+        order.payment = payment
+        order.save(update_fields=["payment"])
+
+        return order
+
+    def post_webhook(self, order, payment, transaction_id=991122):
+        payload = {
+            "obj": {
+                "order": {
+                    "merchant_order_id": (
+                        f"order-{order.id}-payment-{payment.id}"
+                    ),
+                },
+                "amount_cents": order.total_price,
+                "id": transaction_id,
+                "created_at": timezone.now().isoformat(),
+                "success": True,
+            }
+        }
+
+        with patch(
+            "payments.services.paymob_service.PaymobService.verify_transaction_hmac",
+            return_value=True,
+        ):
+            return self.client.post(
+                "/api/payments/webhook/?hmac=test-hmac",
+                payload,
+                format="json",
+            )
+
+    def test_webhook_processed_for_valid_reservation(self):
+        order = self.make_pending_order()
+
+        response = self.post_webhook(order, order.payment)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], "payment_processed")
+        self.assertEqual(response.data["order_id"], order.id)
+
+        order.refresh_from_db()
+        order.reservation.refresh_from_db()
+        order.payment.refresh_from_db()
+
+        self.assertEqual(order.status, Order.OrderStatus.PAID)
+        self.assertEqual(
+            order.payment.status,
+            Payment.PaymentStatus.SUCCESS,
+        )
+        self.assertEqual(order.payment.provider_transaction_id, "991122")
+        self.assertEqual(
+            order.reservation.status,
+            Reservation.ReservationStatus.CONFIRMED,
+        )
+        self.assertTrue(Balance.objects.filter(order=order).exists())
+
+    def test_duplicate_webhook_is_idempotent(self):
+        order = self.make_pending_order()
+
+        first = self.post_webhook(order, order.payment)
+        second = self.post_webhook(order, order.payment)
+
+        self.assertEqual(first.status_code, status.HTTP_200_OK)
+        self.assertEqual(second.status_code, status.HTTP_200_OK)
+        self.assertEqual(second.data["status"], "payment_processed")
+
+        self.assertEqual(Balance.objects.filter(order=order).count(), 1)
+        self.assertEqual(
+            AuditLog.objects.filter(
+                action=AuditLog.AuditAction.ORDER_PAID,
+                entity_id=order.id,
+            ).count(),
+            1,
+        )
+        order.refresh_from_db()
+        self.assertEqual(order.status, Order.OrderStatus.PAID)
+
+    def test_webhook_ignored_for_expired_reservation(self):
+        order = self.make_pending_order()
+
+        reservation = order.reservation
+        reservation.status = Reservation.ReservationStatus.EXPIRED
+        reservation.expires_at = timezone.now() - timedelta(minutes=1)
+        reservation.save(update_fields=["status", "expires_at"])
+
+        response = self.post_webhook(order, order.payment)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], "ignored")
+        self.assertTrue(response.data["reason"])
+
+        order.refresh_from_db()
+        order.payment.refresh_from_db()
+
+        self.assertEqual(order.status, Order.OrderStatus.PENDING)
+        self.assertEqual(order.payment.status, Payment.PaymentStatus.PENDING)
+        self.assertIsNone(order.payment.provider_transaction_id)
+
+    def test_webhook_ignored_for_cancelled_reservation(self):
+        order = self.make_pending_order()
+
+        reservation = order.reservation
+        reservation.status = Reservation.ReservationStatus.CANCELLED
+        reservation.save(update_fields=["status"])
+
+        response = self.post_webhook(order, order.payment)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], "ignored")
+
+        order.refresh_from_db()
+        self.assertEqual(order.status, Order.OrderStatus.PENDING)
+        self.assertEqual(
+            order.payment.status,
+            Payment.PaymentStatus.PENDING,
+        )
+
+    def test_webhook_ignored_after_refund(self):
+        order = self.make_pending_order()
+
+        # Process the first (successful) payment.
+        self.post_webhook(order, order.payment)
+
+        # Emulate the outcome of a completed refund.
+        order.refresh_from_db()
+        order.status = Order.OrderStatus.REFUNDED
+        order.save(update_fields=["status"])
+        order.payment.status = Payment.PaymentStatus.REFUNDED
+        order.payment.save(update_fields=["status"])
+
+        # A stale retry of the success webhook must not flip it back.
+        response = self.post_webhook(order, order.payment)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], "ignored")
+
+        order.refresh_from_db()
+        order.payment.refresh_from_db()
+
+        self.assertEqual(order.status, Order.OrderStatus.REFUNDED)
+        self.assertEqual(
+            order.payment.status,
+            Payment.PaymentStatus.REFUNDED,
+        )
+
+
 class RefundCutoffTestCase(RefundAPITestCase):
     """
     Refunds are blocked for everyone (buyers, organizers, staff) within

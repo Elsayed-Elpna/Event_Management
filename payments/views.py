@@ -1,5 +1,7 @@
 from django.shortcuts import render
 
+import logging
+
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -7,8 +9,11 @@ from rest_framework.response import Response
 from .services.paymob_service import PaymobService
 from .services.payments_webhook_service import process_successful_payment
 from .services.order_payment_webhook_service import (
+    WebhookIgnoredError,
     process_successful_order_payment,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class PaymobWebhookAPIView(APIView):
@@ -59,10 +64,32 @@ class PaymobWebhookAPIView(APIView):
         # ---------------------------------
 
         if merchant_order_id.startswith("subscription-"):
-
-            subscription = process_successful_payment(
-                transaction_data=transaction_data,
-            )
+            try:
+                subscription = process_successful_payment(
+                    transaction_data=transaction_data,
+                )
+            except WebhookIgnoredError as exc:
+                logger.warning(
+                    "Ignoring subscription webhook: %s", exc
+                )
+                return Response(
+                    {
+                        "status": "ignored",
+                        "reason": str(exc),
+                    },
+                    status=status.HTTP_200_OK,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to process subscription webhook; acknowledging to stop retries."
+                )
+                return Response(
+                    {
+                        "status": "ignored",
+                        "reason": "internal_error",
+                    },
+                    status=status.HTTP_200_OK,
+                )
 
             return Response(
                 {
@@ -78,10 +105,30 @@ class PaymobWebhookAPIView(APIView):
         # ---------------------------------
 
         elif merchant_order_id.startswith("order-"):
-
-            order = process_successful_order_payment(
-                transaction_data=transaction_data,
-            )
+            try:
+                order = process_successful_order_payment(
+                    transaction_data=transaction_data,
+                )
+            except WebhookIgnoredError as exc:
+                logger.warning("Ignoring order webhook: %s", exc)
+                return Response(
+                    {
+                        "status": "ignored",
+                        "reason": str(exc),
+                    },
+                    status=status.HTTP_200_OK,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to process order webhook; acknowledging to stop retries."
+                )
+                return Response(
+                    {
+                        "status": "ignored",
+                        "reason": "internal_error",
+                    },
+                    status=status.HTTP_200_OK,
+                )
 
             return Response(
                 {

@@ -9,18 +9,23 @@ from reservations.models import Reservation
 from balance.models import Balance
 
 
+class WebhookIgnoredError(Exception):
+    """The webhook is stale or unprocessable. It should be acknowledged so the
+    provider stops retrying, without mutating any state."""
+
+
 @transaction.atomic
 def process_successful_order_payment(*, transaction_data):
 
     merchant_order_id = transaction_data["order"]["merchant_order_id"]
 
     if not merchant_order_id.startswith("order-"):
-        raise ValueError("Unsupported merchant order")
+        raise WebhookIgnoredError("Unsupported merchant order")
 
     parts = merchant_order_id.split("-")
 
     if len(parts) != 4:
-        raise ValueError("Invalid order merchant order")
+        raise WebhookIgnoredError("Invalid order merchant order")
 
     order_id = parts[1]
     payment_id = parts[3]
@@ -41,31 +46,67 @@ def process_successful_order_payment(*, transaction_data):
     payment = order.payment
 
     if payment is None:
-        raise ValueError("Order does not have a payment.")
+        raise WebhookIgnoredError("Order does not have a payment.")
 
     # ---------------------------------
     # 2. Validate payment ownership
     # ---------------------------------
 
     if payment.id != int(payment_id):
-        raise ValueError("Payment does not belong to order.")
+        raise WebhookIgnoredError("Payment does not belong to order.")
 
     # ---------------------------------
     # 3. Validate amount
     # ---------------------------------
 
     if payment.amount != transaction_data["amount_cents"]:
-        raise ValueError("Payment amount mismatch.")
+        raise WebhookIgnoredError("Payment amount mismatch.")
 
     # ---------------------------------
-    # 4. Idempotency
+    # 4. Idempotency - already processed
     # ---------------------------------
 
     if payment.status == Payment.PaymentStatus.SUCCESS:
         return order
 
     # ---------------------------------
-    # 5. Update payment
+    # 5. Terminal states - never re-open an order that was refunded, failed,
+    #    or otherwise left PENDING after a reservation was already released.
+    # ---------------------------------
+
+    if order.status != Order.OrderStatus.PENDING:
+        raise WebhookIgnoredError(
+            "Order is no longer pending; ignoring stale payment webhook."
+        )
+
+    # ---------------------------------
+    # 6. Validate the reservation BEFORE recording the payment as successful.
+    #    If the hold already expired or was cancelled, we must NOT mark the
+    #    payment as paid, otherwise a charged customer would be left with no
+    #    ticket and no refund path.
+    # ---------------------------------
+
+    reservation = (
+        Reservation.objects.select_for_update()
+        .select_related(
+            "ticket_type",
+            "ticket_type__event",
+        )
+        .get(id=order.reservation_id)
+    )
+
+    if reservation.status != Reservation.ReservationStatus.HELD:
+        raise WebhookIgnoredError(
+            "Reservation is no longer held; ignoring stale payment webhook."
+        )
+
+    if reservation.expires_at <= timezone.now():
+        raise WebhookIgnoredError(
+            "Reservation has expired; ignoring stale payment webhook."
+        )
+
+    # ---------------------------------
+    # 7. Record the payment as successful
     # ---------------------------------
 
     transaction_id = str(transaction_data["id"])
@@ -84,7 +125,7 @@ def process_successful_order_payment(*, transaction_data):
     )
 
     # ---------------------------------
-    # 6. Update order
+    # 8. Update order
     # ---------------------------------
 
     order.status = Order.OrderStatus.PAID
@@ -95,29 +136,6 @@ def process_successful_order_payment(*, transaction_data):
             "updated_at",
         ]
     )
-
-    # ---------------------------------
-    # 7. Lock reservation
-    # ---------------------------------
-
-    reservation = (
-        Reservation.objects.select_for_update()
-        .select_related(
-            "ticket_type",
-            "ticket_type__event",
-        )
-        .get(id=order.reservation_id)
-    )
-
-    # ---------------------------------
-    # 8. Validate reservation
-    # ---------------------------------
-
-    if reservation.status != Reservation.ReservationStatus.HELD:
-        raise ValueError("Only held reservations can be confirmed.")
-
-    if reservation.expires_at <= timezone.now():
-        raise ValueError("Reservation has expired.")
 
     # ---------------------------------
     # 9. Confirm reservation

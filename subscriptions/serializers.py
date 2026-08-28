@@ -1,14 +1,16 @@
 from rest_framework import serializers
 
-from .models import Subscription
+from .models import Subscription, SubscriptionStatus
 
 
 class SubscriptionCreateSerializer(serializers.Serializer):
     def validate(self, attrs):
         request = self.context["request"]
 
-        if hasattr(request.user, "subscription"):
-            raise serializers.ValidationError("User already has a subscription")
+        subscription = getattr(request.user, "subscription", None)
+
+        if subscription is not None and subscription.status == SubscriptionStatus.ACTIVE:
+            raise serializers.ValidationError("User already has an active subscription")
 
         return attrs
 

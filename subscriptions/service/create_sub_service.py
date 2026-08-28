@@ -52,6 +52,40 @@ def create_subscription(*, user):
 
 @transaction.atomic
 def _create_pending_subscription(*, user, price_cents):
+    existing = getattr(user, "subscription", None)
+
+    # A user only ever owns one subscription row (OneToOne with the user).
+    # If a previous attempt/subscription exists but is no longer active
+    # (PENDING from a failed checkout, EXPIRED, or CANCELLED), reuse it so
+    # the user can retry or renew instead of being locked out forever.
+    if existing is not None:
+        subscription = existing
+        subscription.status = SubscriptionStatus.PENDING
+        subscription.starts_at = None
+        subscription.expires_at = None
+        subscription.amount_cents = price_cents
+
+        payment = Payment.objects.create(
+            payment_type=Payment.PaymentType.SUBSCRIPTION,
+            amount=price_cents,
+            status=Payment.PaymentStatus.PENDING,
+        )
+
+        subscription.payment = payment
+
+        subscription.save(
+            update_fields=[
+                "status",
+                "starts_at",
+                "expires_at",
+                "amount_cents",
+                "payment",
+                "updated_at",
+            ]
+        )
+
+        return subscription, payment
+
     subscription = Subscription.objects.create(
         user=user,
         amount_cents=price_cents,

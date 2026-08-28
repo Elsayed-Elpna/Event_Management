@@ -76,6 +76,84 @@ class SubscriptionCreateAPITestCase(APITestCase):
         )
         self.assertIsNone(subscription.payment.provider_reference)
 
+    def test_retry_after_provider_outage_succeeds(self):
+        with patch(
+            "payments.services.paymob_service.PaymobService.create_payment_intention",
+            side_effect=requests.ConnectionError("boom"),
+        ):
+            first_response = self.client.post(
+                "/api/subscriptions/", {}, format="json"
+            )
+
+        self.assertEqual(first_response.status_code, status.HTTP_400_BAD_REQUEST)
+
+        subscription_before = Subscription.objects.get(user=self.user)
+
+        self.assertEqual(subscription_before.status, SubscriptionStatus.PENDING)
+
+        with patch(
+            "payments.services.paymob_service.PaymobService.create_payment_intention",
+            return_value={"id": "ref-retry", "client_secret": "secret-retry"},
+        ):
+            second_response = self.client.post(
+                "/api/subscriptions/", {}, format="json"
+            )
+
+        self.assertEqual(second_response.status_code, status.HTTP_201_CREATED)
+        self.assertIn("secret-retry", second_response.data["checkout_url"])
+        self.assertEqual(
+            second_response.data["payment"]["provider_reference"],
+            "ref-retry",
+        )
+
+        subscription = Subscription.objects.get(user=self.user)
+
+        self.assertEqual(subscription.id, subscription_before.id)
+        self.assertEqual(subscription.status, SubscriptionStatus.PENDING)
+        self.assertNotEqual(subscription.payment_id, subscription_before.payment_id)
+        self.assertEqual(subscription.payment.provider_reference, "ref-retry")
+        self.assertEqual(subscription.amount_cents, 100000)
+        self.assertEqual(Payment.objects.count(), 2)
+
+    def test_renew_after_expired_succeeds(self):
+        expired = Subscription.objects.create(
+            user=self.user,
+            amount_cents=100000,
+            status=SubscriptionStatus.EXPIRED,
+        )
+
+        with patch(
+            "payments.services.paymob_service.PaymobService.create_payment_intention",
+            return_value={"id": "ref-renew", "client_secret": "secret-renew"},
+        ):
+            response = self.client.post("/api/subscriptions/", {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        subscription = Subscription.objects.get(user=self.user)
+
+        self.assertEqual(subscription.id, expired.id)
+        self.assertEqual(subscription.status, SubscriptionStatus.PENDING)
+        self.assertIsNone(subscription.starts_at)
+        self.assertIsNone(subscription.expires_at)
+        self.assertEqual(subscription.amount_cents, 100000)
+
+    def test_cannot_buy_while_active(self):
+        Subscription.objects.create(
+            user=self.user,
+            amount_cents=100000,
+            status=SubscriptionStatus.ACTIVE,
+        )
+
+        response = self.client.post("/api/subscriptions/", {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn(
+            "active subscription",
+            str(response.data["non_field_errors"]),
+        )
+        self.assertEqual(Subscription.objects.filter(user=self.user).count(), 1)
+
     def test_provider_reference_first_writer_wins(self):
         _, payment = _create_pending_subscription(
             user=self.user,

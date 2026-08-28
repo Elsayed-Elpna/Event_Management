@@ -425,6 +425,8 @@ class OversellConcurrencyTest(TransactionTestCase):
                 return "succeeded"
             except ValueError:
                 return "denied"
+            finally:
+                connection.close()
 
         with ThreadPoolExecutor(max_workers=attempts) as executor:
             results = list(executor.map(attempt, range(attempts)))

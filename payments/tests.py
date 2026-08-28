@@ -1,7 +1,8 @@
-from django.test import TestCase
+﻿from django.test import TestCase
 
 # Create your tests here.
-from datetime import timedelta
+from datetime import datetime, timedelta
+from datetime import timezone as dt_timezone
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -800,6 +801,81 @@ class OrderWebhookGuardTestCase(APITestCase):
         self.assertEqual(
             order.payment.status,
             Payment.PaymentStatus.REFUNDED,
+        )
+
+
+class SubscriptionWebhookTestCase(APITestCase):
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email="subwebhook@test.com",
+            password="TestPassword123",
+            is_event_maker=False,
+        )
+
+        self.subscription = Subscription.objects.create(
+            user=self.user,
+            amount_cents=100000,
+            status=SubscriptionStatus.PENDING,
+        )
+
+        self.payment = Payment.objects.create(
+            payment_type=Payment.PaymentType.SUBSCRIPTION,
+            amount=100000,
+            status=Payment.PaymentStatus.PENDING,
+        )
+
+        self.subscription.payment = self.payment
+        self.subscription.save(update_fields=["payment"])
+
+    def test_process_successful_subscription_payment(self):
+        from payments.services.payments_webhook_service import (
+            process_successful_payment,
+        )
+
+        transaction_data = {
+            "order": {
+                "merchant_order_id": (
+                    f"subscription-{self.subscription.id}-payment-{self.payment.id}"
+                ),
+            },
+            "amount_cents": self.payment.amount,
+            "id": 777888,
+            "created_at": "2026-01-01T10:00:00.000000",
+            "success": True,
+        }
+
+        subscription = process_successful_payment(
+            transaction_data=transaction_data,
+        )
+
+        subscription.refresh_from_db()
+        subscription.payment.refresh_from_db()
+        self.user.refresh_from_db()
+
+        self.assertEqual(subscription.status, SubscriptionStatus.ACTIVE)
+        self.assertTrue(self.user.is_event_maker)
+        self.assertEqual(
+            subscription.payment.status,
+            Payment.PaymentStatus.SUCCESS,
+        )
+        self.assertEqual(
+            str(subscription.payment.provider_transaction_id),
+            "777888",
+        )
+
+        self.assertTrue(timezone.is_aware(subscription.payment.paid_at))
+        self.assertEqual(
+            subscription.payment.paid_at,
+            datetime(2026, 1, 1, 10, 0, tzinfo=dt_timezone.utc),
+        )
+        self.assertEqual(
+            subscription.starts_at,
+            datetime(2026, 1, 1, 10, 0, tzinfo=dt_timezone.utc),
+        )
+        self.assertEqual(
+            subscription.expires_at,
+            datetime(2026, 1, 31, 10, 0, tzinfo=dt_timezone.utc),
         )
 
 

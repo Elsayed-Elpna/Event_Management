@@ -113,7 +113,14 @@ def process_successful_order_payment(*, transaction_data):
 
     payment.provider_transaction_id = transaction_id
     payment.status = Payment.PaymentStatus.SUCCESS
-    payment.paid_at = parse_datetime(transaction_data["created_at"])
+    paid_at = parse_datetime(transaction_data["created_at"])
+
+    # Paymob sends a naive ISO timestamp; make it aware so the stored value
+    # is correct under USE_TZ.
+    if timezone.is_naive(paid_at):
+        paid_at = timezone.make_aware(paid_at)
+
+    payment.paid_at = paid_at
 
     payment.save(
         update_fields=[

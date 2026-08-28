@@ -1,6 +1,7 @@
 from django.db import transaction
 
 from django.utils.dateparse import parse_datetime
+from django.utils import timezone
 from datetime import timedelta
 
 from subscriptions.models import Subscription, SubscriptionStatus
@@ -46,7 +47,13 @@ def process_successful_payment(*, transaction_data):
 
     payment.provider_transaction_id = transaction_id
     payment.status = Payment.PaymentStatus.SUCCESS
-    payment.paid_at = transaction_data["created_at"]
+
+    paid_at = parse_datetime(transaction_data["created_at"])
+
+    if timezone.is_naive(paid_at):
+        paid_at = timezone.make_aware(paid_at)
+
+    payment.paid_at = paid_at
 
     payment.save(
         update_fields=[
@@ -77,6 +84,12 @@ def process_successful_payment(*, transaction_data):
     subscription.status = SubscriptionStatus.ACTIVE
 
     starts_at = parse_datetime(transaction_data["created_at"])
+
+    # Paymob sends a naive ISO timestamp; make it aware before using it so
+    # expires_at is computed against the same instant in UTC.
+    if timezone.is_naive(starts_at):
+        starts_at = timezone.make_aware(starts_at)
+
     subscription.starts_at = starts_at
     subscription.expires_at = starts_at + timedelta(days=30)
 
